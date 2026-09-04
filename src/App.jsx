@@ -24,7 +24,7 @@ try {
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (e) {}
-const SAVE_ID = 'neon-game-n4-v15';
+const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 export default function App() {
