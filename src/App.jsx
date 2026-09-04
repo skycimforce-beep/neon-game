@@ -153,8 +153,8 @@ export default function App() {
     }
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
 
-    var saveGame = async (newData) => { setPlayerData(newData); if (user && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${user.uid}`), newData, { merge: true }); };
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
+  const saveGame = async (newData) => { setPlayerData(newData); if (user && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${user.uid}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -163,7 +163,6 @@ export default function App() {
     }
   }, [secretClicks]);
 
-  const saveGame = async (newData) => { setPlayerData(newData); if (user && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${user.uid}`), newData, { merge: true }); };
 
   const handleNext = (newHp) => {
     if (newHp <= 0) {
