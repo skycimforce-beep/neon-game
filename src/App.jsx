@@ -4,19 +4,33 @@ import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
 import { GachaModal } from './components/GachaModal';
+import { LoginScreen } from './components/LoginScreen';
 import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-const firebaseConfig = { apiKey: "demo", authDomain: "demo", projectId: "demo", storageBucket: "demo", messagingSenderId: "1", appId: "1" };
-let app, auth, db; try { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); } catch (e) {}
+const firebaseConfig = {
+  apiKey: "AIzaSyCpXrQh7AktIh4hXaflxQ-gqmQcJzxqCYs",
+  authDomain: "neon-game-26577.firebaseapp.com",
+  projectId: "neon-game-26577",
+  storageBucket: "neon-game-26577.firebasestorage.app",
+  messagingSenderId: "822197953664",
+  appId: "1:822197953664:web:0eede32e7265c7d801b265"
+};
+let app, auth, db;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {}
 const SAVE_ID = 'neon-game-n4-v15';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [screen, setScreen] = useState('menu'); 
+  const [callsign, setCallsign] = useState(null);
+  const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   
@@ -120,7 +134,7 @@ export default function App() {
     const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 2).map(q => ({ wave: 2, type: 'type', data: q }));
     const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
     const fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w3Reading];
-    
+
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
@@ -130,6 +144,26 @@ export default function App() {
     loadEncounter(fullQueue[0]);
     setScreen('battle');
   };
+
+
+  useEffect(() => {
+    if (!callsign || !db) return;
+    setIsLoading(true);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
+    const unsubscribe = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setPlayerData({
+          ...data,
+          critRate: data.critRate || 0.1,
+          lastLoginDate: data.lastLoginDate || '',
+          mastery: data.mastery || {}
+        });
+      }
+      setIsLoading(false);
+    });
+    return () => unsubscribe();
+  }, [callsign]);
 
   useEffect(() => {
     if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
@@ -154,7 +188,7 @@ export default function App() {
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (user && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${user.uid}`), newData, { merge: true }); };
+  const saveGame = async (newData) => { setPlayerData(newData); if (callsign && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -163,6 +197,23 @@ export default function App() {
     }
   }, [secretClicks]);
 
+
+
+  useEffect(() => {
+    if (!auth) { setIsLoading(false); return; }
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) { print("Auth Error", err); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+  const handleLoginSuccess = (enteredCallsign) => {
+    setCallsign(enteredCallsign);
+    setScreen('menu');
+  };
 
   const handleNext = (newHp) => {
     if (newHp <= 0) {
@@ -565,7 +616,10 @@ export default function App() {
       {/* --- Header --- */}
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
         <div className="flex justify-between items-center text-sm">
-          <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+          <div className="flex flex-col">
+            <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+            {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={() => { setSoundEnabled(!soundEnabled); sfx.enabled = !soundEnabled; }} className="text-gray-400 hover:text-white p-1">
               {soundEnabled ? <Volume2 size={16}/> : <VolumeX size={16}/>}
@@ -583,6 +637,9 @@ export default function App() {
       </header>
 
       <main className="flex-1 overflow-y-auto flex flex-col relative">
+        {screen === 'login' && (
+          <LoginScreen onLogin={handleLoginSuccess} />
+        )}
         {/* --- 主選單 --- */}
         {screen === 'menu' && (
           <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
