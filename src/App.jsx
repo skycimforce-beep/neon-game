@@ -283,7 +283,7 @@ export default function App() {
         else triggerFx('slash');
       }
       saveGame(pData);
-      setTimeout(() => handleNext(pData.hp), 800);
+      setFeedback({ show: true, isWrong: false, damageTaken: 0, text: mistakeInfo?.exp || '解析', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', translation: mistakeInfo?.translation || '' });
     } else {
       sfx.playError();
       setCombo(0);
@@ -324,7 +324,7 @@ export default function App() {
     handleNext(playerData.hp);
   };
 
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example }); };
+  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, translation: combatUI.data.translation }); };
   const handleSortClick = (word, isAvailable, index) => {
     if(!combatUI.data) return;
     let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
@@ -336,18 +336,14 @@ export default function App() {
     if (newSlots.filter(s => s !== null).length === 4) {
       const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
       const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example });
+      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, translation: combatUI.data.translation });
     }
   };
-  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example }); };
-  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example }); };
+  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example, translation: combatUI.data.translation }); };
+  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, translation: combatUI.data.translation }); };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
-    if (idx === combatUI.data.correct) {
-      processAnswer(true, 1.5, 0, null);
-    } else {
-      processAnswer(false, 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example });
-    }
+    processAnswer(idx === combatUI.data.correct, 1.5, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, translation: combatUI.data.translation });
   };
 
   const handleReadingClick = (idx) => {

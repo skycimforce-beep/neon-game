@@ -2,7 +2,7 @@ import React from 'react';
 
 export const RubyText = ({ text, showRuby = false }) => {
   if (!text || typeof text !== 'string') return text;
-  const parts = text.split(/([一-龯々]+)\[(.*?)\]/g);
+  const parts = text.split(/([^\[\]]+)\[(.*?)\]/g);
   return (
     <>
       {parts.map((part, i) => {
