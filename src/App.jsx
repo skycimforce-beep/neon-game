@@ -1,22 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
-import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA } from './data/questions';
+import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
 import { GachaModal } from './components/GachaModal';
+import { LoginScreen } from './components/LoginScreen';
 import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-const firebaseConfig = { apiKey: "demo", authDomain: "demo", projectId: "demo", storageBucket: "demo", messagingSenderId: "1", appId: "1" };
-let app, auth, db; try { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); } catch (e) {}
-const SAVE_ID = 'neon-game-n4-v15';
+const firebaseConfig = {
+  apiKey: "AIzaSyCpXrQh7AktIh4hXaflxQ-gqmQcJzxqCYs",
+  authDomain: "neon-game-26577.firebaseapp.com",
+  projectId: "neon-game-26577",
+  storageBucket: "neon-game-26577.firebasestorage.app",
+  messagingSenderId: "822197953664",
+  appId: "1:822197953664:web:0eede32e7265c7d801b265"
+};
+let app, auth, db;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {}
+const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [screen, setScreen] = useState('menu'); 
+  const [callsign, setCallsign] = useState(null);
+  const [showDetailedProgress, setShowDetailedProgress] = useState(false);
+  const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   
@@ -67,7 +82,7 @@ export default function App() {
   const triggerFx = (type) => { setCombatFx(type); setTimeout(() => setCombatFx(null), 500); };
   const triggerScreenShake = () => { setScreenShake(true); setTimeout(() => setScreenShake(false), 300); };
 
-  const TOTAL_ENEMIES = VOCAB_DATA.length + GRAMMAR_SORT_DATA.length + GRAMMAR_TYPE_DATA.length + READING_DATA.length;
+  const TOTAL_ENEMIES = VOCAB_DATA.length + GRAMMAR_SORT_DATA.length + GRAMMAR_TYPE_DATA.length + READING_DATA.length + GRAMMAR_MCQ_DATA.length;
   const masteryObj = playerData.mastery || {};
   const masteredCount = Object.values(masteryObj).filter(c => c >= 3).length;
   const purificationRate = Math.floor((masteredCount / TOTAL_ENEMIES) * 100);
@@ -99,6 +114,9 @@ export default function App() {
     if (!encounter) return;
     const baseTime = 60 + (equippedChip?.id === 'chip_cyber' ? 10 : 0);
     let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
+    if (encounter.type === 'mcq') {
+      uiState.data = encounter.data;
+    }
     if (encounter.type === 'vocab') {
       let options = [encounter.data.answers[0]];
       let wrongPool = shuffle(VOCAB_DATA.filter(v => v.id !== encounter.data.id)).map(v => v.answers[0]);
@@ -117,10 +135,11 @@ export default function App() {
     const w1Vocab = getUnmastered(VOCAB_DATA, 4).map(q => ({ wave: 1, type: 'vocab', data: q }));
     const potionQ = Math.random() > 0.4 ? getUnmastered(POTION_DATA, 1).map(q => ({ wave: 1, type: 'potion', data: q })) : [];
     const w2Sort = getUnmastered(GRAMMAR_SORT_DATA, 2).map(q => ({ wave: 2, type: 'sort', data: q }));
-    const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 2).map(q => ({ wave: 2, type: 'type', data: q }));
+    const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 1).map(q => ({ wave: 2, type: 'type', data: q }));
+    const w2Mcq = getUnmastered(GRAMMAR_MCQ_DATA, 2).map(q => ({ wave: 2, type: 'mcq', data: q }));
     const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
-    const fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w3Reading];
-    
+    const fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w2Mcq, ...w3Reading];
+
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
@@ -130,6 +149,26 @@ export default function App() {
     loadEncounter(fullQueue[0]);
     setScreen('battle');
   };
+
+
+  useEffect(() => {
+    if (!callsign || !db) return;
+    setIsLoading(true);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
+    const unsubscribe = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setPlayerData({
+          ...data,
+          critRate: data.critRate || 0.1,
+          lastLoginDate: data.lastLoginDate || '',
+          mastery: data.mastery || {}
+        });
+      }
+      setIsLoading(false);
+    });
+    return () => unsubscribe();
+  }, [callsign]);
 
   useEffect(() => {
     if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
@@ -154,7 +193,7 @@ export default function App() {
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (user && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${user.uid}`), newData, { merge: true }); };
+  const saveGame = async (newData) => { setPlayerData(newData); if (callsign && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -163,6 +202,23 @@ export default function App() {
     }
   }, [secretClicks]);
 
+
+
+  useEffect(() => {
+    if (!auth) { setIsLoading(false); return; }
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (err) { print("Auth Error", err); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+  const handleLoginSuccess = (enteredCallsign) => {
+    setCallsign(enteredCallsign);
+    setScreen('menu');
+  };
 
   const handleNext = (newHp) => {
     if (newHp <= 0) {
@@ -285,6 +341,15 @@ export default function App() {
   };
   const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example }); };
   const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example }); };
+  const handleMcqClick = (idx) => {
+    if (!combatUI.data) return;
+    if (idx === combatUI.data.correct) {
+      processAnswer(true, 1.5, 0, null);
+    } else {
+      processAnswer(false, 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example });
+    }
+  };
+
   const handleReadingClick = (idx) => {
     if(!combatUI.data || !combatUI.data.questions) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
@@ -565,7 +630,10 @@ export default function App() {
       {/* --- Header --- */}
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
         <div className="flex justify-between items-center text-sm">
-          <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+          <div className="flex flex-col">
+            <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+            {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={() => { setSoundEnabled(!soundEnabled); sfx.enabled = !soundEnabled; }} className="text-gray-400 hover:text-white p-1">
               {soundEnabled ? <Volume2 size={16}/> : <VolumeX size={16}/>}
@@ -583,6 +651,9 @@ export default function App() {
       </header>
 
       <main className="flex-1 overflow-y-auto flex flex-col relative">
+        {screen === 'login' && (
+          <LoginScreen onLogin={handleLoginSuccess} />
+        )}
         {/* --- 主選單 --- */}
         {screen === 'menu' && (
           <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
@@ -596,7 +667,19 @@ export default function App() {
                 <div className="h-4 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
                   <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_cyan] rounded-full" style={{ width: `${purificationRate}%` }}></div>
                 </div>
-                <div className="text-right text-[10px] text-gray-500 font-bold mt-1">已掌握節點: {masteredCount} / {TOTAL_ENEMIES}</div>
+                <div className="flex justify-between items-center mt-1">
+                  <button onClick={() => setShowDetailedProgress(!showDetailedProgress)} className="text-[10px] text-cyan-500 hover:text-cyan-300 font-bold underline cursor-pointer">{showDetailedProgress ? '隱藏詳細資訊' : '詳細資訊'}</button>
+                  <div className="text-[10px] text-gray-500 font-bold">已掌握節點: {masteredCount} / {TOTAL_ENEMIES}</div>
+                </div>
+                {showDetailedProgress && (
+                  <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 text-xs text-gray-400 flex flex-col gap-1 mt-2 animate-in slide-in-from-top-2">
+                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && VOCAB_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {VOCAB_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_SORT_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_SORT_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_TYPE_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_MCQ_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && READING_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {READING_DATA.length}</span></div>
+                  </div>
+                )}
               </div>
 
               {/* 當前啟用的套裝共鳴提示 */}
@@ -836,6 +919,18 @@ export default function App() {
                      <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
                      <button type="submit" className="bg-cyan-700 text-white p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
                    </form>
+                 )}
+                 {combatUI.type === 'mcq' && (
+                   <div className="flex flex-col h-full animate-in zoom-in-95">
+                     <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={false} /></div>
+                     <div className="grid grid-cols-1 gap-2 mt-4">
+                       {combatUI.data.options.map((opt, idx) => (
+                         <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold">
+                           <RubyText text={opt} showRuby={false} />
+                         </button>
+                       ))}
+                     </div>
+                   </div>
                  )}
                  {combatUI.type === 'potion' && (
                    <div className="flex flex-col h-full animate-in zoom-in-95">
