@@ -187,7 +187,7 @@ export default function App() {
       setPlayerData(prev => ({ ...prev, hp: Math.max(0, (prev.hp || 100) - dmg) }));
       triggerScreenShake();
       setCombo(0);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。' });
+      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。', translation: '' });
       setCombatUI(prev => ({ ...prev, timeLeft: 60 }));
     }
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
@@ -308,13 +308,13 @@ export default function App() {
         if (!currentMistakes.find(m => m.q === mistakeInfo.q)) pData.mistakes = [mistakeInfo, ...currentMistakes].slice(0, 30);
       }
       saveGame(pData);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '' });
+      setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', translation: mistakeInfo?.translation || '' });
     }
   };
 
   const handleAcknowledgeFeedback = () => {
     const wasWrong = feedback.isWrong;
-    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', isWrong: false });
+    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', translation: '', isWrong: false });
     if (wasWrong && combatUI.type !== 'potion') {
       setWaveState(prev => {
         const currentEncounter = prev.queue[prev.currentIndex];
