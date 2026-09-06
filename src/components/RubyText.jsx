@@ -4,7 +4,8 @@ export const RubyText = ({ text, showRuby = false }) => {
   if (!text || typeof text !== 'string') return text;
   // Normalize double-byte parentheses to single-byte brackets to simplify regex parsing
   const normalizedText = text.replace(/（/g, '[').replace(/）/g, ']');
-  const parts = normalizedText.split(/([一-龯々]+)\[(.*?)\]/g);
+  // eslint-disable-next-line no-useless-escape
+  const parts = normalizedText.split(/([^\[\]]+)\[(.*?)\]/g);
   return (
     <>
       {parts.map((part, i) => {
