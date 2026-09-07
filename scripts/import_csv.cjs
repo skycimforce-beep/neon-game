@@ -24,7 +24,7 @@ const vocabData = vocabRaw.map(v => {
     answers: [v['假名']],
     usage: `${v['詞性']} - ${v['中文意思']}`,
     example: cleanText(v['例句']),
-    exampleZh: '' // No translation available in N4_Vocabulary.csv
+    exampleZh: cleanText(v['例句翻譯'] || '')
   };
 });
 
