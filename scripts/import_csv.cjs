@@ -15,7 +15,8 @@ const vocabRaw = parseCSV('tmp/N4_Vocabulary.csv');
 const grammarRaw = parseCSV('tmp/N4_Grammar.csv');
 
 // Transform Vocab
-const vocabData = vocabRaw.filter(v => cleanText(v["例句翻譯"])).map(v => {
+// Note: Vocabulary CSV doesn't have "例句翻譯", only Grammar does.
+const vocabData = vocabRaw.map(v => {
   let chString = v['漢字'] && v['漢字'] !== v['假名'] ? `${v['漢字']}[${v['假名']}]` : v['假名'];
   return {
     id: v['ID'],
@@ -23,7 +24,7 @@ const vocabData = vocabRaw.filter(v => cleanText(v["例句翻譯"])).map(v => {
     answers: [v['假名']],
     usage: `${v['詞性']} - ${v['中文意思']}`,
     example: cleanText(v['例句']),
-    exampleZh: cleanText(v['例句翻譯'] || '')
+    exampleZh: '' // No translation available in N4_Vocabulary.csv
   };
 });
 
@@ -77,7 +78,7 @@ if (questionsFile.includes(grammarMarker)) {
 
 // Inject into VOCAB_DATA
 const vocabString = vocabData.map(v => `  ${JSON.stringify(v)}`).join(',\n');
-const vocabInsertionPoint = questionsFile.lastIndexOf('];', questionsFile.indexOf('export const GRAMMAR_SORT_DATA'));
+const vocabArrayStart = questionsFile.indexOf('export const VOCAB_DATA = ['); const vocabInsertionPoint = questionsFile.indexOf('];', vocabArrayStart);
 if (vocabInsertionPoint !== -1) {
     questionsFile = questionsFile.slice(0, vocabInsertionPoint) + ',\n  // === 外部匯入 N4 單字 ===\n' + vocabString + '\n' + questionsFile.slice(vocabInsertionPoint);
 }
