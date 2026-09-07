@@ -2,7 +2,10 @@ import React from 'react';
 
 export const RubyText = ({ text, showRuby = false }) => {
   if (!text || typeof text !== 'string') return text;
-  const parts = text.split(/([一-龯々]+)\[(.*?)\]/g);
+  // Normalize double-byte parentheses to single-byte brackets to simplify regex parsing
+  const normalizedText = text.replace(/（/g, '[').replace(/）/g, ']');
+  // eslint-disable-next-line no-useless-escape
+  const parts = normalizedText.split(/([^\[\]]+)\[(.*?)\]/g);
   return (
     <>
       {parts.map((part, i) => {
