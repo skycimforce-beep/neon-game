@@ -330,7 +330,7 @@ export default function App() {
     handleNext(playerData.hp);
   };
 
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh || '暫無翻譯' }); };
+  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
   const handleSortClick = (word, isAvailable, index) => {
     if(!combatUI.data) return;
     let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
