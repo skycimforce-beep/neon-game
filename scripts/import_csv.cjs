@@ -1,61 +1,34 @@
 const fs = require('fs');
+const { parse } = require('csv-parse/sync');
 
 function parseCSV(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  const lines = content.split('\n').filter(line => line.trim() !== '');
-  const headers = lines[0].split(',').map(h => h.trim());
-  const data = [];
+  return parse(content, { columns: true, skip_empty_lines: true });
+}
 
-  for (let i = 1; i < lines.length; i++) {
-    // Handle quotes in CSV
-    let currentLine = lines[i];
-    let inQuote = false;
-    let values = [];
-    let currentVal = '';
-
-    for (let j = 0; j < currentLine.length; j++) {
-      let char = currentLine[j];
-      if (char === '"') {
-        inQuote = !inQuote;
-      } else if (char === ',' && !inQuote) {
-        values.push(currentVal.trim());
-        currentVal = '';
-      } else {
-        currentVal += char;
-      }
-    }
-    values.push(currentVal.trim());
-
-    if (values.length === headers.length) {
-      let obj = {};
-      headers.forEach((header, index) => {
-        obj[header] = values[index];
-      });
-      data.push(obj);
-    }
-  }
-  return data;
+function cleanText(text) {
+  if (!text) return '';
+  return text.replace(/\[span_\d+\]|\(start_span\)|\(end_span\)/g, '').trim();
 }
 
 const vocabRaw = parseCSV('tmp/N4_Vocabulary.csv');
 const grammarRaw = parseCSV('tmp/N4_Grammar.csv');
 
 // Transform Vocab
-const vocabData = vocabRaw.map(v => {
+const vocabData = vocabRaw.filter(v => cleanText(v["例句翻譯"])).map(v => {
   let chString = v['漢字'] && v['漢字'] !== v['假名'] ? `${v['漢字']}[${v['假名']}]` : v['假名'];
   return {
     id: v['ID'],
     ch: chString,
     answers: [v['假名']],
     usage: `${v['詞性']} - ${v['中文意思']}`,
-    example: v['例句'],
-    exampleZh: v['例句翻譯']
+    example: cleanText(v['例句']),
+    exampleZh: cleanText(v['例句翻譯'] || '')
   };
 });
 
 // Transform Grammar into 4-option MCQ
-// Let's test the grammar point given the Chinese translation.
-const grammarData = grammarRaw.map((g, index) => {
+const grammarData = grammarRaw.filter(g => cleanText(g["例句翻譯"])).map((g, index) => {
   const correctOption = g['文法句型'];
 
   // Pick 3 random wrong options
@@ -72,26 +45,35 @@ const grammarData = grammarRaw.map((g, index) => {
   const options = [correctOption, ...wrongOptions].sort(() => Math.random() - 0.5);
   const correctIndex = options.indexOf(correctOption);
 
-  // We will ask to fill in the blank in the example, or if example is not provided, ask for the translation.
-  // Actually, asking for the grammar structure based on translation is safer since we can't easily parse out the grammar from the example dynamically.
   return {
     id: g['ID'],
     question: `【接續】${g['接續方式']}\n【意思】${g['中文意思']}`,
     options: options,
     correct: correctIndex,
     explanation: g['中文意思'],
-    example: g['例句'],
-    exampleZh: g['例句翻譯']
+    example: cleanText(g['例句']),
+    exampleZh: cleanText(g['例句翻譯'] || '')
   };
 });
 
-// Now we need to append these to src/data/questions/index.js
 let questionsFile = fs.readFileSync('src/data/questions/index.js', 'utf-8');
 
-// We append the new arrays at the end of the file.
-// We also need to add export const GRAMMAR_MCQ_DATA = [...];
-// For VOCAB_DATA, since it already exists, it might be better to merge it or create an EXTENDED_VOCAB_DATA.
-// Let's just create a new constant NEW_VOCAB_DATA and we can merge it in App.jsx, or better, we can inject it directly into the VOCAB_DATA array.
+// We need to clean up the previously injected data first to make this idempotent.
+const vocabMarker = '// === 外部匯入 N4 單字 ===';
+if (questionsFile.includes(vocabMarker)) {
+    // Cut off everything from vocab marker to the closing bracket of VOCAB_DATA
+    const startIdx = questionsFile.indexOf(vocabMarker);
+    const prevStartIdx = questionsFile.lastIndexOf(',', startIdx);
+    const endIdx = questionsFile.indexOf('];', startIdx);
+
+    questionsFile = questionsFile.substring(0, prevStartIdx > -1 ? prevStartIdx : startIdx) + '\n' + questionsFile.substring(endIdx);
+}
+
+const grammarMarker = 'export const GRAMMAR_MCQ_DATA';
+if (questionsFile.includes(grammarMarker)) {
+    const startIdx = questionsFile.indexOf(grammarMarker);
+    questionsFile = questionsFile.substring(0, startIdx);
+}
 
 // Inject into VOCAB_DATA
 const vocabString = vocabData.map(v => `  ${JSON.stringify(v)}`).join(',\n');
