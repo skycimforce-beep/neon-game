@@ -48,7 +48,8 @@ const vocabData = vocabRaw.map(v => {
     ch: chString,
     answers: [v['假名']],
     usage: `${v['詞性']} - ${v['中文意思']}`,
-    example: v['例句']
+    example: v['例句'],
+    exampleZh: v['例句翻譯']
   };
 });
 
@@ -79,7 +80,8 @@ const grammarData = grammarRaw.map((g, index) => {
     options: options,
     correct: correctIndex,
     explanation: g['中文意思'],
-    example: g['例句']
+    example: g['例句'],
+    exampleZh: g['例句翻譯']
   };
 });
 

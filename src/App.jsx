@@ -46,7 +46,7 @@ export default function App() {
 
   const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false });
   const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 60 });
-  const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', isWrong: false });
+  const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
   const [isPaused, setIsPaused] = useState(false);
 
   const [shopTab, setShopTab] = useState('gacha');
@@ -187,7 +187,7 @@ export default function App() {
       setPlayerData(prev => ({ ...prev, hp: Math.max(0, (prev.hp || 100) - dmg) }));
       triggerScreenShake();
       setCombo(0);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。' });
+      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。', exampleZh: '' });
       setCombatUI(prev => ({ ...prev, timeLeft: 60 }));
     }
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
@@ -283,7 +283,13 @@ export default function App() {
         else triggerFx('slash');
       }
       saveGame(pData);
-      setTimeout(() => handleNext(pData.hp), 800);
+      if (mistakeInfo) {
+        setTimeout(() => {
+          setFeedback({ show: true, isWrong: false, damageTaken: 0, text: mistakeInfo.exp || '', correct: mistakeInfo.a || '', example: mistakeInfo.example || '', exampleZh: mistakeInfo.exampleZh || '' });
+        }, 800);
+      } else {
+        setTimeout(() => handleNext(pData.hp), 800);
+      }
     } else {
       sfx.playError();
       setCombo(0);
@@ -308,13 +314,13 @@ export default function App() {
         if (!currentMistakes.find(m => m.q === mistakeInfo.q)) pData.mistakes = [mistakeInfo, ...currentMistakes].slice(0, 30);
       }
       saveGame(pData);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '' });
+      setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', exampleZh: mistakeInfo?.exampleZh || '' });
     }
   };
 
   const handleAcknowledgeFeedback = () => {
     const wasWrong = feedback.isWrong;
-    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', isWrong: false });
+    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
     if (wasWrong && combatUI.type !== 'potion') {
       setWaveState(prev => {
         const currentEncounter = prev.queue[prev.currentIndex];
@@ -324,7 +330,7 @@ export default function App() {
     handleNext(playerData.hp);
   };
 
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example }); };
+  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
   const handleSortClick = (word, isAvailable, index) => {
     if(!combatUI.data) return;
     let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
@@ -336,32 +342,28 @@ export default function App() {
     if (newSlots.filter(s => s !== null).length === 4) {
       const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
       const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example });
+      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
     }
   };
-  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example }); };
-  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example }); };
+  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
-    if (idx === combatUI.data.correct) {
-      processAnswer(true, 1.5, 0, null);
-    } else {
-      processAnswer(false, 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example });
-    }
+    processAnswer(idx === combatUI.data.correct, idx === combatUI.data.correct ? 1.5 : 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
 
   const handleReadingClick = (idx) => {
     if(!combatUI.data || !combatUI.data.questions) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
     if (idx === qData.correct) {
-      if (combatUI.readingStep === 0) { setCombatUI(prev => ({ ...prev, readingStep: 1 })); triggerFx('slash'); } else processAnswer(true, 3, 0, null);
+      if (combatUI.readingStep === 0) { setCombatUI(prev => ({ ...prev, readingStep: 1 })); triggerFx('slash'); } else processAnswer(true, 3, 0, { q: qData.q, a: qData.options[qData.correct], exp: qData.explanation });
     } else processAnswer(false, 1, 0, { q: qData.q, a: qData.options[qData.correct], exp: qData.explanation });
   };
 
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
-  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', isWrong: false }); startWaveRun(); };
+  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(); };
   const handleSurrender = () => {
-    setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', isWrong: false });
+    setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
     saveGame({ ...playerData, hp: playerData.maxHp || 100 });
     showToast("已安全撤退至主終端。", "info"); setScreen('menu');
   };
@@ -958,15 +960,29 @@ export default function App() {
              {/* 回饋彈窗 */}
              {feedback.show && (
               <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-                <div className="bg-gray-900 border-2 border-red-500 rounded-3xl w-full max-w-sm flex flex-col overflow-hidden shadow-[0_0_50px_rgba(239,68,68,0.3)] max-h-[90vh]">
-                  <div className="bg-red-950 p-6 border-b border-red-900 text-center shrink-0 flex flex-col items-center">
-                    <AlertTriangle className="text-red-500 mb-2 animate-pulse" size={40} />
-                    <h3 className="font-black text-red-400 text-xl">防線突破！受到 {feedback.damageTaken} 傷害</h3>
+                <div className={`bg-gray-900 border-2 ${feedback.isWrong ? 'border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.3)]' : 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.3)]'} rounded-3xl w-full max-w-sm flex flex-col overflow-hidden max-h-[90vh]`}>
+                  <div className={`${feedback.isWrong ? 'bg-red-950 border-red-900' : 'bg-green-950 border-green-900'} p-6 border-b text-center shrink-0 flex flex-col items-center`}>
+                    {feedback.isWrong ? (
+                      <AlertTriangle className="text-red-500 mb-2 animate-pulse" size={40} />
+                    ) : (
+                      <CheckCircle2 className="text-green-500 mb-2 animate-pulse" size={40} />
+                    )}
+                    <h3 className={`font-black ${feedback.isWrong ? 'text-red-400' : 'text-green-400'} text-xl`}>
+                      {feedback.isWrong ? `防線突破！受到 ${feedback.damageTaken} 傷害` : '解析成功！'}
+                    </h3>
                   </div>
                   <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
-                    {feedback.correct && (<div><span className="text-sm text-gray-400 font-bold block mb-2">🎯 正確防禦指令</span><div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div></div>)}
-                    <div><span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span><div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]"><RubyText text={feedback.text} showRuby={true} /></div></div>
-                    {feedback.example && (<div><span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span><div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose"><RubyText text={feedback.example} showRuby={true} /></div></div>)}
+                    {feedback.correct && (<div><span className="text-sm text-gray-400 font-bold block mb-2">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span><div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div></div>)}
+                    {feedback.text && (<div><span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span><div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]"><RubyText text={feedback.text} showRuby={true} /></div></div>)}
+                    {feedback.example && (
+                      <div>
+                        <span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span>
+                        <div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose">
+                          <RubyText text={feedback.example} showRuby={true} />
+                          {feedback.exampleZh && <div className="text-sm text-gray-400 mt-2 font-normal border-t border-yellow-900/30 pt-2">{feedback.exampleZh}</div>}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <button onClick={handleAcknowledgeFeedback} className="bg-cyan-800 hover:bg-cyan-700 text-white p-6 font-black active:bg-cyan-600 text-xl shrink-0 rounded-b-2xl border-t border-cyan-700 transition-colors">確認並前進</button>
                 </div>
