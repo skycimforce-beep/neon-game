@@ -13,6 +13,7 @@ function cleanText(text) {
 
 const vocabRaw = parseCSV('tmp/N4_Vocabulary.csv');
 const grammarRaw = parseCSV('tmp/N4_Grammar.csv');
+const grammarSortRaw = parseCSV('tmp/N4_Grammar_Sort.csv');
 
 // Transform Vocab
 // Note: Vocabulary CSV doesn't have "例句翻譯", only Grammar does.
@@ -70,10 +71,38 @@ if (questionsFile.includes(vocabMarker)) {
     questionsFile = questionsFile.substring(0, prevStartIdx > -1 ? prevStartIdx : startIdx) + '\n' + questionsFile.substring(endIdx);
 }
 
+// Transform Grammar Sort
+const grammarSortData = grammarSortRaw.map(g => {
+  const parts = [g['選項1'], g['選項2'], g['選項3'], g['選項4']];
+  const correctOrder = g['正確順序'].split('-').map(num => parseInt(num, 10) - 1);
+  const context = (g['後文'] && g['後文'] !== '。') ? `${g['前文']}／${g['後文']}` : `${g['前文']}／`;
+
+  return {
+    id: `gs_${g['ID']}`,
+    context: context,
+    parts: parts,
+    correctOrder: correctOrder,
+    translation: g['中文翻譯'],
+    example: g['文法解析'],
+    exampleZh: `完整句子：${g['完整句子']}`
+  };
+});
+
 const grammarMarker = 'export const GRAMMAR_MCQ_DATA';
 if (questionsFile.includes(grammarMarker)) {
     const startIdx = questionsFile.indexOf(grammarMarker);
     questionsFile = questionsFile.substring(0, startIdx);
+}
+
+const grammarSortMarker = '// === 外部匯入 N4 文法重組 ===';
+if (questionsFile.includes(grammarSortMarker)) {
+    const startIdx = questionsFile.indexOf(grammarSortMarker);
+    const prevStartIdx = questionsFile.lastIndexOf(',', startIdx);
+    const endIdx = questionsFile.indexOf('];', startIdx);
+
+    if (endIdx !== -1) {
+        questionsFile = questionsFile.substring(0, prevStartIdx > -1 ? prevStartIdx : startIdx) + '\n' + questionsFile.substring(endIdx);
+    }
 }
 
 // Inject into VOCAB_DATA
@@ -81,6 +110,14 @@ const vocabString = vocabData.map(v => `  ${JSON.stringify(v)}`).join(',\n');
 const vocabArrayStart = questionsFile.indexOf('export const VOCAB_DATA = ['); const vocabInsertionPoint = questionsFile.indexOf('];', vocabArrayStart);
 if (vocabInsertionPoint !== -1) {
     questionsFile = questionsFile.slice(0, vocabInsertionPoint) + ',\n  // === 外部匯入 N4 單字 ===\n' + vocabString + '\n' + questionsFile.slice(vocabInsertionPoint);
+}
+
+// Inject into GRAMMAR_SORT_DATA
+const grammarSortString = grammarSortData.map(g => `  ${JSON.stringify(g)}`).join(',\n');
+const grammarSortArrayStart = questionsFile.indexOf('export const GRAMMAR_SORT_DATA = [');
+const grammarSortInsertionPoint = questionsFile.indexOf('];', grammarSortArrayStart);
+if (grammarSortInsertionPoint !== -1) {
+    questionsFile = questionsFile.slice(0, grammarSortInsertionPoint) + ',\n  // === 外部匯入 N4 文法重組 ===\n' + grammarSortString + '\n' + questionsFile.slice(grammarSortInsertionPoint);
 }
 
 // Add GRAMMAR_MCQ_DATA
