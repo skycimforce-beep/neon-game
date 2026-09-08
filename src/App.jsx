@@ -1295,60 +1295,60 @@ export default function App() {
               ))}
             </div>
 
-            {/* 錯誤詳細資料彈窗 */}
-            {selectedMistake && (
-              <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-                <div className="bg-gray-900 border-2 border-orange-500 shadow-[0_0_50px_rgba(249,115,22,0.3)] rounded-3xl w-full max-w-sm flex flex-col overflow-hidden max-h-[90vh]">
-                  <div className="bg-orange-950 border-b border-orange-900 p-6 text-center shrink-0 flex flex-col items-center">
-                    <Database className="text-orange-400 mb-2" size={40} />
-                    <h3 className="font-black text-orange-400 text-xl">
-                      錯誤詳細資料
-                    </h3>
-                  </div>
-                  <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
-                    {selectedMistake.a && (
-                      <div>
-                        <span className="text-sm text-gray-400 font-bold block mb-2">🎯 正確解答</span>
-                        <div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose">
-                          <RubyText text={selectedMistake.a} showRuby={true} />
-                        </div>
-                      </div>
-                    )}
-                    {selectedMistake.exp && (
-                      <div>
-                        <span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span>
-                        <div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]">
-                          <RubyText text={selectedMistake.exp} showRuby={true} />
-                        </div>
-                      </div>
-                    )}
-                    {selectedMistake.example && (
-                      <div>
-                        <span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span>
-                        <div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose">
-                          <RubyText text={selectedMistake.example} showRuby={true} />
-                          {selectedMistake.exampleZh && (
-                            <div className="text-sm text-gray-400 mt-2 font-normal border-t border-yellow-900/30 pt-2">
-                              {selectedMistake.exampleZh}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <button onClick={() => setSelectedMistake(null)} className="bg-cyan-800 hover:bg-cyan-700 text-white p-6 font-black active:bg-cyan-600 text-xl shrink-0 rounded-b-2xl border-t border-cyan-700 transition-colors">
-                    確認並返回
-                  </button>
-                </div>
-              </div>
-            )}
-
             <div className="pt-4 border-t border-gray-900 mt-auto shrink-0 z-10">
               <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
             </div>
           </div>
         )}
       </main>
+
+      {/* 錯誤詳細資料彈窗 */}
+      {selectedMistake && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-gray-900 border-2 border-orange-500 shadow-[0_0_50px_rgba(249,115,22,0.3)] rounded-3xl w-full max-w-sm flex flex-col overflow-hidden max-h-[90vh]">
+            <div className="bg-orange-950 border-b border-orange-900 p-6 text-center shrink-0 flex flex-col items-center">
+              <Database className="text-orange-400 mb-2" size={40} />
+              <h3 className="font-black text-orange-400 text-xl">
+                錯誤詳細資料
+              </h3>
+            </div>
+            <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
+              {selectedMistake.a && (
+                <div>
+                  <span className="text-sm text-gray-400 font-bold block mb-2">🎯 正確解答</span>
+                  <div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose">
+                    <RubyText text={selectedMistake.a} showRuby={true} />
+                  </div>
+                </div>
+              )}
+              {selectedMistake.exp && (
+                <div>
+                  <span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span>
+                  <div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]">
+                    <RubyText text={selectedMistake.exp} showRuby={true} />
+                  </div>
+                </div>
+              )}
+              {selectedMistake.example && (
+                <div>
+                  <span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span>
+                  <div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose">
+                    <RubyText text={selectedMistake.example} showRuby={true} />
+                    {selectedMistake.exampleZh && (
+                      <div className="text-sm text-gray-400 mt-2 font-normal border-t border-yellow-900/30 pt-2">
+                        {selectedMistake.exampleZh}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+            <button onClick={() => setSelectedMistake(null)} className="bg-cyan-800 hover:bg-cyan-700 text-white p-6 font-black active:bg-cyan-600 text-xl shrink-0 rounded-b-2xl border-t border-cyan-700 transition-colors">
+              確認並返回
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
