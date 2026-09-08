@@ -355,9 +355,26 @@ export default function App() {
   const handleReadingClick = (idx) => {
     if(!combatUI.data || !combatUI.data.questions) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
+
+    // Pass the translation in the exampleZh field, and a label in the example field
+    const feedbackInfo = {
+      q: qData.q,
+      a: qData.options[qData.correct],
+      exp: qData.explanation,
+      example: '【文章翻譯】',
+      exampleZh: combatUI.data.translation
+    };
+
     if (idx === qData.correct) {
-      if (combatUI.readingStep === 0) { setCombatUI(prev => ({ ...prev, readingStep: 1 })); triggerFx('slash'); } else processAnswer(true, 3, 0, { q: qData.q, a: qData.options[qData.correct], exp: qData.explanation });
-    } else processAnswer(false, 1, 0, { q: qData.q, a: qData.options[qData.correct], exp: qData.explanation });
+      if (combatUI.readingStep < combatUI.data.questions.length - 1) {
+        setCombatUI(prev => ({ ...prev, readingStep: prev.readingStep + 1 }));
+        triggerFx('slash');
+      } else {
+        processAnswer(true, 3, 0, feedbackInfo);
+      }
+    } else {
+      processAnswer(false, 1, 0, feedbackInfo);
+    }
   };
 
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
