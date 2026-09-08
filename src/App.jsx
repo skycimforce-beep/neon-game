@@ -356,11 +356,18 @@ export default function App() {
     if(!combatUI.data || !combatUI.data.questions) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
 
+    // Format option translations to prepend to the explanation
+    const optionsText = qData.optionTranslations && qData.optionTranslations.length > 0
+      ? qData.options.map((opt, i) => `${i + 1}. ${opt} (${qData.optionTranslations[i]})`).join('\n')
+      : '';
+
+    const fullExplanation = optionsText ? `【選項翻譯】\n${optionsText}\n\n【解析】\n${qData.explanation}` : qData.explanation;
+
     // Pass the translation in the exampleZh field, and a label in the example field
     const feedbackInfo = {
       q: qData.q,
       a: qData.options[qData.correct],
-      exp: qData.explanation,
+      exp: fullExplanation,
       example: '【文章翻譯】',
       exampleZh: combatUI.data.translation
     };
