@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target } from 'lucide-react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // ==========================================
@@ -64,16 +64,18 @@ const shuffleArray = (array) => {
   return newArr;
 };
 
+const DEFAULT_PLAYER_DATA = {
+  hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
+  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {} 
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [screen, setScreen] = useState('menu'); 
   const [isLoading, setIsLoading] = useState(true);
   const [checkInMsg, setCheckInMsg] = useState(null);
   
-  const [playerData, setPlayerData] = useState({
-    hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-    critRate: 0.1, lastLoginDate: '', readLogs: [], mastery: {} 
-  });
+  const [playerData, setPlayerData] = useState(DEFAULT_PLAYER_DATA);
 
   const [questionPool, setQuestionPool] = useState({ vocab: [], grammar: [] });
   const [battleState, setBattleState] = useState({
@@ -86,17 +88,62 @@ export default function App() {
     show: false, damageTaken: 0, correctAnswer: '', usage: '', explanation: '', example: ''
   });
 
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
+
   useEffect(() => {
     if (!auth) { setIsLoading(false); return; }
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (err) { console.error("Auth Error", err); }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+      } else {
+        try {
+          await signInAnonymously(auth);
+        } catch (err) { console.error("Auth Error", err); }
+      }
+    });
     return () => unsubscribe();
   }, []);
+
+  const handleAuthSubmit = async () => {
+    setAuthError('');
+    if (!emailInput || !passwordInput) {
+      setAuthError('請輸入 Email 與密碼');
+      return;
+    }
+    if (passwordInput.length < 6) {
+      setAuthError('密碼長度至少需 6 個字元');
+      return;
+    }
+    
+    try {
+      if (authMode === 'signup') {
+        const currentData = { ...playerData };
+        const userCred = await createUserWithEmailAndPassword(auth, emailInput, passwordInput);
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${userCred.user.uid}`), currentData, { merge: true });
+      } else {
+        await signInWithEmailAndPassword(auth, emailInput, passwordInput);
+      }
+      setShowAuthModal(false);
+      setEmailInput('');
+      setPasswordInput('');
+    } catch (err) {
+      console.error(err);
+      if (err.code === 'auth/email-already-in-use') setAuthError('此 Email 已經被註冊過了');
+      else if (err.code === 'auth/invalid-credential') setAuthError('Email 或密碼錯誤');
+      else setAuthError('發生錯誤：' + err.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      // signOut will trigger onAuthStateChanged with null, which will sign in anonymously again!
+    } catch (err) { console.error("Logout Error", err); }
+  };
 
   useEffect(() => {
     if (!user || !db) { setIsLoading(false); return; }
@@ -104,13 +151,17 @@ export default function App() {
     const unsubscribe = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        let loadedCrit = data.critRate || 5.0;
+        if (loadedCrit < 1) loadedCrit = 5.0; // Migrate old 0.1 format
         setPlayerData({
           ...data,
-          critRate: data.critRate || 0.1,
+          critRate: loadedCrit,
           lastLoginDate: data.lastLoginDate || '',
           readLogs: data.readLogs || [],
           mastery: data.mastery || {}
         });
+      } else {
+        setPlayerData(DEFAULT_PLAYER_DATA);
       }
       setIsLoading(false);
     });
@@ -180,7 +231,6 @@ export default function App() {
       if (isCrit) { damage *= 2; attackMsg = `【CRITICAL 爆擊！】核心直擊！造成 ${damage} 點巨額傷害。`; }
 
       const newEnemyHp = Math.max(0, battleState.enemyHp - damage);
-      if (enemyType === 'normal') newPlayerData.def += 1; else newPlayerData.atk += 2;
       newPlayerData.ult = Math.min(newPlayerData.maxUlt, newPlayerData.ult + 10);
 
       if (!isHintUsed) {
@@ -189,7 +239,8 @@ export default function App() {
       }
 
       if (newEnemyHp <= 0) {
-        setBattleState(prev => ({ ...prev, enemyHp: 0, message: '協議解除成功！病毒已清除。' }));
+        if (enemyType === 'normal') newPlayerData.def += 1; else newPlayerData.atk += 2;
+        setBattleState(prev => ({ ...prev, enemyHp: 0, message: '協議解除成功！病毒已清除。(獲得數值成長)' }));
         setTimeout(() => setScreen('menu'), 1500);
       } else {
         const nextQ = getNextQuestion(enemyType, newPlayerData.mastery);
@@ -231,9 +282,9 @@ export default function App() {
   const handleAcknowledgeFeedback = () => {
     setFeedback({ show: false });
     if (playerData.hp <= 0) {
-      let resetData = { ...playerData, hp: playerData.maxHp };
+      let resetData = { ...playerData, hp: playerData.maxHp, ult: 0 };
       saveGame(resetData);
-      alert("系統崩潰... 重新啟動中。");
+      alert("機體損毀，重新啟動系統... (HP已恢復，但 ULT 能量已歸零)");
       setScreen('menu');
     } else {
       const nextQ = getNextQuestion(battleState.enemyType, playerData.mastery);
@@ -279,16 +330,18 @@ export default function App() {
     const today = getTodayString();
     if (playerData.lastLoginDate === today) return;
 
-    let newCritRate = playerData.critRate || 0.1;
+    let newCritRate = playerData.critRate || 5.0;
+    if (newCritRate < 1) newCritRate = 5.0; // Migrate old 0.1 format
+    
     let message = "";
     let isReset = false;
 
     if (!playerData.lastLoginDate) {
-      newCritRate = 0.2; message = "系統首次連線！爆擊率 +0.1%";
+      newCritRate += 1.0; message = "系統首次連線！爆擊率 +1.0%";
     } else {
       const diffDays = Math.ceil(Math.abs(new Date(today) - new Date(playerData.lastLoginDate)) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; } 
-      else if (diffDays >= 2) { newCritRate = 0.1; isReset = true; message = `中斷連線！加成歸零，爆擊率重置為 0.1%`; }
+      if (diffDays === 1) { newCritRate += 1.0; message = "連續連線成功！爆擊率 +1.0%"; } 
+      else if (diffDays >= 2) { newCritRate = 5.0; isReset = true; message = `中斷連線！加成歸零，爆擊率重置為 5.0%`; }
     }
     saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)) });
     setCheckInMsg({ text: message, isReset });
@@ -302,7 +355,19 @@ export default function App() {
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 relative shadow-md">
         <div className="flex justify-between items-center text-sm">
           <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> 語譯駭客 N4協議</span>
-          <span className="text-xs text-gray-500">UID: {user ? user.uid.substring(0,6) : 'OFFLINE'}</span>
+          <div className="flex items-center gap-2">
+            {user && !user.isAnonymous ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-green-400 flex items-center gap-1"><UserCircle size={14}/> {user.email?.split('@')[0]}</span>
+                <button onClick={handleLogout} className="text-gray-500 hover:text-red-400" title="登出"><LogOut size={14}/></button>
+              </div>
+            ) : (
+              <button onClick={() => setShowAuthModal(true)} className="flex items-center gap-1 text-xs bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-800 px-2 py-1 rounded text-cyan-300 transition-colors">
+                <UserCircle size={14}/> 訪客 (綁定帳號)
+              </button>
+            )}
+            <span className="text-xs text-gray-600">[{user ? user.uid.substring(0,4) : 'OFF'}]</span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-red-400 text-xs w-8">HP</span>
@@ -352,7 +417,7 @@ export default function App() {
               </div>
               <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getTodayString()} className={`w-full p-3 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getTodayString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 shadow-[0_0_15px_rgba(34,197,94,0.3)] animate-pulse'}`}>
                 <CalendarCheck size={18} />
-                {playerData.lastLoginDate === getTodayString() ? '今日已連線' : '每日連線 (+0.1% 爆擊)'}
+                {playerData.lastLoginDate === getTodayString() ? '今日已連線' : '每日連線 (+1.0% 爆擊)'}
               </button>
             </div>
 
@@ -525,6 +590,43 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {showAuthModal && (
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-cyan-800 rounded-xl p-6 w-full max-w-sm shadow-[0_0_20px_rgba(6,182,212,0.2)] relative">
+            <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-gray-500 hover:text-cyan-400">
+              <XCircle size={24} />
+            </button>
+            <h2 className="text-xl font-bold mb-6 text-cyan-300 text-center flex items-center justify-center gap-2">
+              <UserCircle />
+              {authMode === 'login' ? '登入系統' : '註冊並綁定進度'}
+            </h2>
+            
+            {authError && <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded-lg text-red-200 text-sm">{authError}</div>}
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-cyan-700 text-xs mb-1">EMAIL 憑證</label>
+                <input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} className="w-full bg-gray-950 border border-cyan-900 rounded-lg p-2.5 text-cyan-100 focus:outline-none focus:border-cyan-500" placeholder="user@example.com" />
+              </div>
+              <div>
+                <label className="block text-cyan-700 text-xs mb-1">授權密碼</label>
+                <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full bg-gray-950 border border-cyan-900 rounded-lg p-2.5 text-cyan-100 focus:outline-none focus:border-cyan-500" placeholder="至少 6 個字元" />
+              </div>
+              <button onClick={handleAuthSubmit} className="w-full bg-cyan-800 hover:bg-cyan-700 text-cyan-100 font-bold py-3 rounded-lg transition-colors mt-2">
+                {authMode === 'login' ? '執行登入' : '註冊帳號 (繼承當前進度)'}
+              </button>
+            </div>
+            
+            <div className="mt-6 text-center text-gray-500 text-sm">
+              {authMode === 'login' ? '未註冊？ ' : '已有帳號？ '}
+              <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-cyan-400 hover:text-cyan-300 font-bold underline">
+                {authMode === 'login' ? '立即註冊' : '切換為登入'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
