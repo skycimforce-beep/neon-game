@@ -66,7 +66,7 @@ const shuffleArray = (array) => {
 
 const DEFAULT_PLAYER_DATA = {
   hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {} 
+  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {}, killStreak: 0, highestStreak: 0
 };
 
 export default function App() {
@@ -83,6 +83,7 @@ export default function App() {
     isHintUsed: false, hiddenOptions: []
   });
   const [inputValue, setInputValue] = useState('');
+  const [streakAlert, setStreakAlert] = useState(null);
   
   const [feedback, setFeedback] = useState({
     show: false, damageTaken: 0, correctAnswer: '', usage: '', explanation: '', example: ''
@@ -158,7 +159,9 @@ export default function App() {
           critRate: loadedCrit,
           lastLoginDate: data.lastLoginDate || '',
           readLogs: data.readLogs || [],
-          mastery: data.mastery || {}
+          mastery: data.mastery || {},
+          killStreak: data.killStreak || 0,
+          highestStreak: data.highestStreak || 0
         });
       } else {
         setPlayerData(DEFAULT_PLAYER_DATA);
@@ -240,6 +243,21 @@ export default function App() {
 
       if (newEnemyHp <= 0) {
         if (enemyType === 'normal') newPlayerData.def += 1; else newPlayerData.atk += 2;
+        
+        newPlayerData.killStreak = (newPlayerData.killStreak || 0) + 1;
+        newPlayerData.highestStreak = Math.max(newPlayerData.highestStreak || 0, newPlayerData.killStreak);
+
+        if (newPlayerData.killStreak === 3) {
+          setStreakAlert({ count: 3, title: '系統入侵者', color: 'text-blue-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        } else if (newPlayerData.killStreak === 5) {
+          setStreakAlert({ count: 5, title: '亂碼終結者', color: 'text-purple-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        } else if (newPlayerData.killStreak >= 10 && newPlayerData.killStreak % 5 === 0) {
+          setStreakAlert({ count: newPlayerData.killStreak, title: '神級駭客 (GODLIKE)', color: 'text-yellow-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        }
+
         setBattleState(prev => ({ ...prev, enemyHp: 0, message: '協議解除成功！病毒已清除。(獲得數值成長)' }));
         setTimeout(() => setScreen('menu'), 1500);
       } else {
@@ -257,6 +275,7 @@ export default function App() {
       const enemyAtk = enemyType === 'boss' ? 20 : 10;
       const damageTaken = Math.max(1, enemyAtk - Math.floor(newPlayerData.def / 2));
       newPlayerData.hp -= damageTaken;
+      newPlayerData.killStreak = 0;
       newPlayerData.mastery = { ...newPlayerData.mastery, [qId]: 0 };
 
       let displayCorrectAnswer = enemyType === 'normal' 
@@ -391,6 +410,17 @@ export default function App() {
         </div>
       )}
 
+      {streakAlert && (
+        <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none bg-black/40 backdrop-blur-sm transition-all duration-300">
+          <div className={`animate-in zoom-in spin-in-12 duration-500 text-center ${streakAlert.color} drop-shadow-[0_0_20px_rgba(255,255,255,0.5)]`}>
+            <div className="text-6xl font-black italic mb-2">{streakAlert.count} 連殺!</div>
+            <div className="text-4xl font-bold tracking-widest bg-gray-900/80 px-6 py-2 rounded-xl border border-current">
+              {streakAlert.title}
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 overflow-y-auto p-4 flex flex-col relative z-0">
         
         {screen === 'menu' && (
@@ -411,6 +441,8 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4 text-sm mb-4">
                 <div className="flex items-center gap-2 text-red-300"><Zap size={16}/> 攻擊力: {playerData.atk}</div>
                 <div className="flex items-center gap-2 text-blue-300"><Shield size={16}/> 防火牆: {playerData.def}</div>
+                <div className="flex items-center gap-2 text-purple-300"><Target size={16}/> 連殺: {playerData.killStreak || 0}</div>
+                <div className="flex items-center gap-2 text-gray-400"><Target size={16}/> 最高: {playerData.highestStreak || 0}</div>
                 <div className="flex items-center gap-2 text-yellow-300 col-span-2 justify-center bg-yellow-900/20 p-2 rounded border border-yellow-900/50">
                   <Zap size={16}/> 核心爆擊率: {playerData.critRate.toFixed(1)}%
                 </div>
