@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut } from 'lucide-react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut, Backpack, Layers, Hexagon, Coins, Clock, FastForward, Gift, History, Lock, Pause, PlayCircle, Plus, RotateCcw, Search, Settings, ShoppingCart, Trash, Volume, XOctagon, CheckCircle } from 'lucide-react';
+
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { LoginScreen } from './components/LoginScreen';
+import { GachaModal } from './components/GachaModal';
+import { RubyText } from './components/RubyText';
+import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, GRAMMAR_MCQ_DATA, READING_DATA } from './data/questions';
+import { DEFAULT_GACHA_POOL, SET_BONUSES, VIRTUAL_GACHA_POOL } from './data/gachaPool';
+import { sfx } from './utils/soundFX';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCpXrQh7AktIh4hXaflxQ-gqmQcJzxqCYs",
