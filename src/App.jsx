@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut, Backpack, Layers, Hexagon, Coins, Clock, FastForward, Gift, History, Lock, Pause, PlayCircle, Plus, RotateCcw, Search, Settings, ShoppingCart, Trash, Volume, XOctagon, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut, Backpack, Layers, Hexagon, Coins, Clock, FastForward, Gift, History, Lock, Pause, PlayCircle, Plus, RotateCcw, Search, Settings, ShoppingCart, Trash, Volume, XOctagon, CheckCircle, Volume2, VolumeX } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -69,6 +69,16 @@ export default function App() {
   });
   const [showGachaDetails, setShowGachaDetails] = useState(false);
   const [showCoreShop, setShowCoreShop] = useState(false);
+
+  // Missing States restored
+  const [combatUI, setCombatUI] = useState({});
+  const [isPaused, setIsPaused] = useState(false);
+  const [waveState, setWaveState] = useState({ currentWave: 1, currentIndex: 0, queue: [], shieldUsed: false });
+  const [secretClicks, setSecretClicks] = useState(0);
+  const [gachaState, setGachaState] = useState({ status: 'idle', displayRarity: 'N' });
+  const [checkInMsg, setCheckInMsg] = useState(null);
+  const [btnShake, setBtnShake] = useState(false);
+  const clickTimeout = useRef(null);
 
   const [toast, setToast] = useState({ visible: false, message: '', type: 'info' });
   const [combo, setCombo] = useState(0);
@@ -362,7 +372,11 @@ export default function App() {
 
   const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
     if (isPaused) return;
-    let pData = { ...playerData };
+    let newPlayerData = { ...playerData };
+    let pData = newPlayerData;
+    const qId = combatUI.data?.id || 'unknown';
+    const isHintUsed = battleState.isHintUsed;
+    const enemyType = battleState.enemyType || 'normal';
     
     if (isCorrect) {
       const isCrit = Math.random() * 100 < newPlayerData.critRate;
@@ -407,7 +421,7 @@ export default function App() {
         setBattleState(prev => ({ ...prev, enemyHp: 0, message: '協議解除成功！病毒已清除。(獲得數值成長)' }));
         setTimeout(() => setScreen('menu'), 1500);
       } else {
-        triggerDamageNumber(dmg, isCrit);
+        triggerDamageNumber(damage, isCrit);
         if (isCrit || waveState.currentWave === 3) triggerScreenShake();
         if (combatUI.type === 'vocab') triggerFx('slash');
         else if (combatUI.type === 'sort') triggerFx('shield');
