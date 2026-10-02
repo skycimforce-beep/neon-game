@@ -46,6 +46,18 @@ export default function App() {
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false });
+  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', timeLeft: 60, readingStep: 0, inputValue: '' });
+  const [isPaused, setIsPaused] = useState(false);
+  const [secretClicks, setSecretClicks] = useState(0);
+  const [gachaState, setGachaState] = useState({ status: 'idle', displayRarity: 'N', highestRarity: 'N', results: [], isUpgrade: false });
+  const [isEditingShop, setIsEditingShop] = useState(false);
+  const [editPool, setEditPool] = useState([]);
+  const [btnShake, setBtnShake] = useState(false);
+  const [activeBannerIdx, setActiveBannerIdx] = useState(0);
+  const [shopTab, setShopTab] = useState('gacha');
+  const [checkInMsg, setCheckInMsg] = useState(null);
+  const clickTimeout = React.useRef(null);
   
   const [playerData, setPlayerData] = useState(DEFAULT_PLAYER_DATA);
 
