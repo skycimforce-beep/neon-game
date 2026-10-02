@@ -1,13 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { sfx } from './utils/soundFX';
-import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
-import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
-import { RubyText } from './components/RubyText';
-import { GachaModal } from './components/GachaModal';
-import { LoginScreen } from './components/LoginScreen';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, Database, FileText, XCircle, ArrowRight, CalendarCheck, Lightbulb, Target, UserCircle, LogOut } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -27,6 +21,24 @@ try {
 const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
+const getWeekId = () => {
+  const daysSinceEpoch = Math.floor(new Date().getTime() / (1000 * 60 * 60 * 24));
+  const weekNum = Math.floor((daysSinceEpoch + 3) / 7);
+  return `W${weekNum}`;
+};
+
+const generateBots = () => {
+  const names = ['K1to', 'ZeroCool', 'AcidBurn', 'CrashOverride', 'CerealKiller', 'LordNikon', 'Phantom', 'Ghost', 'Neo', 'Trinity', 'Morpheus', 'Cypher', 'Oracle', 'Smith', 'V', 'Silverhand'];
+  const selected = names.sort(() => 0.5 - Math.random()).slice(0, 9);
+  return selected.map(name => ({ name, points: Math.floor(Math.random() * 50) }));
+};
+
+const DEFAULT_PLAYER_DATA = {
+  hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
+  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {}, killStreak: 0, highestStreak: 0,
+  league: { tier: '青銅 (Bronze)', points: 0, weekId: getWeekId(), bots: generateBots() }
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [callsign, setCallsign] = useState(null);
@@ -35,34 +47,18 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   
-  const [playerData, setPlayerData] = useState({
-    hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-    critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
-    gachaPool: DEFAULT_GACHA_POOL, isGachaLocked: false, gachaHistory: [],
-    inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
-    pityCount: 0,
-    dataCores: 0
+  const [playerData, setPlayerData] = useState(DEFAULT_PLAYER_DATA);
+
+  const [questionPool, setQuestionPool] = useState({ vocab: [], grammar: [] });
+  const [battleState, setBattleState] = useState({
+    enemyHp: 50, enemyMaxHp: 50, enemyType: 'normal', currentQuestion: null, message: '',
+    isHintUsed: false, hiddenOptions: []
   });
-
-  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false });
-  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 60 });
-  const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-  const [isPaused, setIsPaused] = useState(false);
-
-  const [shopTab, setShopTab] = useState('gacha');
-  const [activeBannerIdx, setActiveBannerIdx] = useState(0);
-  const [editPool, setEditPool] = useState([]);
-  const [isEditingShop, setIsEditingShop] = useState(false);
-  const [secretClicks, setSecretClicks] = useState(0);
-  const [btnShake, setBtnShake] = useState(false);
-  const clickTimeout = useRef(null);
-
-  const [gachaState, setGachaState] = useState({
-    status: 'idle',
-    results: [],
-    highestRarity: 'N',
-    isUpgrade: false,
-    displayRarity: 'N'
+  const [inputValue, setInputValue] = useState('');
+  const [streakAlert, setStreakAlert] = useState(null);
+  
+  const [feedback, setFeedback] = useState({
+    show: false, damageTaken: 0, correctAnswer: '', usage: '', explanation: '', example: ''
   });
   const [showGachaDetails, setShowGachaDetails] = useState(false);
   const [showCoreShop, setShowCoreShop] = useState(false);
@@ -150,6 +146,62 @@ export default function App() {
     setScreen('battle');
   };
 
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  useEffect(() => {
+    if (!auth) { setIsLoading(false); return; }
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+      } else {
+        try {
+          await signInAnonymously(auth);
+        } catch (err) { console.error("Auth Error", err); }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleAuthSubmit = async () => {
+    setAuthError('');
+    if (!emailInput || !passwordInput) {
+      setAuthError('請輸入 Email 與密碼');
+      return;
+    }
+    if (passwordInput.length < 6) {
+      setAuthError('密碼長度至少需 6 個字元');
+      return;
+    }
+    
+    try {
+      if (authMode === 'signup') {
+        const currentData = { ...playerData };
+        const userCred = await createUserWithEmailAndPassword(auth, emailInput, passwordInput);
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${userCred.user.uid}`), currentData, { merge: true });
+      } else {
+        await signInWithEmailAndPassword(auth, emailInput, passwordInput);
+      }
+      setShowAuthModal(false);
+      setEmailInput('');
+      setPasswordInput('');
+    } catch (err) {
+      console.error(err);
+      if (err.code === 'auth/email-already-in-use') setAuthError('此 Email 已經被註冊過了');
+      else if (err.code === 'auth/invalid-credential') setAuthError('Email 或密碼錯誤');
+      else setAuthError('發生錯誤：' + err.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      // signOut will trigger onAuthStateChanged with null, which will sign in anonymously again!
+    } catch (err) { console.error("Logout Error", err); }
+  };
 
   useEffect(() => {
     if (!callsign || !db) return;
@@ -158,12 +210,20 @@ export default function App() {
     const unsubscribe = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        let loadedCrit = data.critRate || 5.0;
+        if (loadedCrit < 1) loadedCrit = 5.0; // Migrate old 0.1 format
         setPlayerData({
           ...data,
-          critRate: data.critRate || 0.1,
+          critRate: loadedCrit,
           lastLoginDate: data.lastLoginDate || '',
-          mastery: data.mastery || {}
+          readLogs: data.readLogs || [],
+          mastery: data.mastery || {},
+          killStreak: data.killStreak || 0,
+          highestStreak: data.highestStreak || 0,
+          league: data.league || DEFAULT_PLAYER_DATA.league
         });
+      } else {
+        setPlayerData(DEFAULT_PLAYER_DATA);
       }
       setIsLoading(false);
     });
@@ -171,11 +231,53 @@ export default function App() {
   }, [callsign]);
 
   useEffect(() => {
-    if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
-      const timer = setTimeout(() => setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 })), 1000);
-      return () => clearTimeout(timer);
-    } else if (combatUI.timeLeft === 0 && !feedback.show && !isPaused && screen === 'battle') {
-      let dmg = Math.floor((playerData.maxHp || 100) * 0.5);
+    if (!playerData.league) return;
+    const currentWeekId = getWeekId();
+    if (playerData.league.weekId !== currentWeekId) {
+      const allPlayers = [...playerData.league.bots, { name: '您 (You)', points: playerData.league.points }];
+      allPlayers.sort((a, b) => b.points - a.points);
+      const userRank = allPlayers.findIndex(p => p.name === '您 (You)');
+      
+      let newTier = playerData.league.tier;
+      let msg = '';
+      const tiers = ['青銅 (Bronze)', '白銀 (Silver)', '黃金 (Gold)', '菁英 (Elite)'];
+      const currentTierIdx = tiers.indexOf(newTier);
+
+      if (userRank < 3) {
+        if (currentTierIdx < tiers.length - 1) {
+          newTier = tiers[currentTierIdx + 1];
+          msg = `【駭客聯盟結算】\n恭喜！您以第 ${userRank + 1} 名晉升至「${newTier}」階級！`;
+        } else {
+          msg = `【駭客聯盟結算】\n太強了！您以第 ${userRank + 1} 名蟬聯「菁英」霸主！`;
+        }
+      } else if (userRank >= 7) {
+        if (currentTierIdx > 0) {
+          newTier = tiers[currentTierIdx - 1];
+          msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，不幸降級至「${newTier}」階級。`;
+        } else {
+          msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，請在青銅階級繼續努力。`;
+        }
+      } else {
+         msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，成功保級於「${newTier}」。`;
+      }
+
+      alert(msg);
+      
+      const resetData = {
+        ...playerData,
+        league: { tier: newTier, points: 0, weekId: currentWeekId, bots: generateBots() }
+      };
+      saveGame(resetData);
+    }
+  }, [playerData.league?.weekId]);
+
+  const saveGame = async (newData) => {
+    setPlayerData(newData);
+    if (user && db) {
+      const docRef = doc(db, 'saves', `${SAVE_ID}_${user.uid}`);
+      await setDoc(docRef, newData, { merge: true });
+    }
+  };
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
@@ -252,28 +354,47 @@ export default function App() {
     let pData = { ...playerData };
     
     if (isCorrect) {
-      sfx.playHit();
-      const newCombo = combatUI.type === 'potion' ? combo : combo + 1;
-      if (combatUI.type !== 'potion') setCombo(newCombo);
+      const isCrit = Math.random() * 100 < newPlayerData.critRate;
+      let damage = newPlayerData.atk + Math.floor(Math.random() * 5);
+      let attackMsg = `直擊！造成 ${damage} 點數據傷害。`;
+      if (isCrit) { damage *= 2; attackMsg = `【CRITICAL 爆擊！】核心直擊！造成 ${damage} 點巨額傷害。`; }
 
-      const comboBonus = 1 + Math.min(newCombo * 0.05, 0.4);
-      let isCrit = Math.random() * 100 < (pData.critRate || 0.1);
-      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
-      if (isCrit) dmg = Math.floor(dmg * 2.0);
+      const newEnemyHp = Math.max(0, battleState.enemyHp - damage);
+      newPlayerData.ult = Math.min(newPlayerData.maxUlt, newPlayerData.ult + 10);
 
-      if (equippedChip?.id === 'chip_sakura') {
-        heal += 5;
+      if (!isHintUsed) {
+        const currentStreak = newPlayerData.mastery[qId] || 0;
+        newPlayerData.mastery = { ...newPlayerData.mastery, [qId]: currentStreak + 1 };
       }
       pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
 
-      if (combatUI.type !== 'potion' && combatUI.data) {
-        pData.mastery[combatUI.data.id] = (pData.mastery[combatUI.data.id] || 0) + 1;
-        pData.vocabKills = (pData.vocabKills || 0) + 1;
-      }
+      if (newEnemyHp <= 0) {
+        if (enemyType === 'normal') newPlayerData.def += 1; else newPlayerData.atk += 2;
+        
+        if (newPlayerData.league) {
+          newPlayerData.league.points += (enemyType === 'boss' ? 50 : 20);
+          newPlayerData.league.bots = newPlayerData.league.bots.map(bot => {
+            if (Math.random() > 0.4) return { ...bot, points: bot.points + Math.floor(Math.random() * 30) };
+            return bot;
+          });
+        }
 
-      if (combatUI.type === 'potion') {
-        triggerDamageNumber(heal, false, true);
-        triggerFx('heal');
+        newPlayerData.killStreak = (newPlayerData.killStreak || 0) + 1;
+        newPlayerData.highestStreak = Math.max(newPlayerData.highestStreak || 0, newPlayerData.killStreak);
+
+        if (newPlayerData.killStreak === 3) {
+          setStreakAlert({ count: 3, title: '系統入侵者', color: 'text-blue-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        } else if (newPlayerData.killStreak === 5) {
+          setStreakAlert({ count: 5, title: '亂碼終結者', color: 'text-purple-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        } else if (newPlayerData.killStreak >= 10 && newPlayerData.killStreak % 5 === 0) {
+          setStreakAlert({ count: newPlayerData.killStreak, title: '神級駭客 (GODLIKE)', color: 'text-yellow-400' });
+          setTimeout(() => setStreakAlert(null), 3000);
+        }
+
+        setBattleState(prev => ({ ...prev, enemyHp: 0, message: '協議解除成功！病毒已清除。(獲得數值成長)' }));
+        setTimeout(() => setScreen('menu'), 1500);
       } else {
         triggerDamageNumber(dmg, isCrit);
         if (isCrit || waveState.currentWave === 3) triggerScreenShake();
@@ -291,14 +412,22 @@ export default function App() {
         setTimeout(() => handleNext(pData.hp), 800);
       }
     } else {
-      sfx.playError();
-      setCombo(0);
-      triggerScreenShake();
+      const enemyAtk = enemyType === 'boss' ? 20 : 10;
+      const damageTaken = Math.max(1, enemyAtk - Math.floor(newPlayerData.def / 2));
+      newPlayerData.hp -= damageTaken;
+      newPlayerData.killStreak = 0;
+      newPlayerData.mastery = { ...newPlayerData.mastery, [qId]: 0 };
 
-      let dmgTaken = combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2));
+      let displayCorrectAnswer = enemyType === 'normal' 
+        ? `${currentQuestion.ch}（${currentQuestion.answers[0]}）` 
+        : currentQuestion.options[currentQuestion.correct];
 
-      if (activeSetBonus && activeSetBonus.name.includes('櫻華')) {
-        dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.8));
+      const mistakeRecord = enemyType === 'normal' 
+        ? { type: 'vocab', q: currentQuestion.ch, a: currentQuestion.answers[0], exp: currentQuestion.usage }
+        : { type: 'grammar', q: currentQuestion.question, a: currentQuestion.options[currentQuestion.correct], exp: currentQuestion.explanation };
+      
+      if (!newPlayerData.mistakes.find(m => m.q === mistakeRecord.q)) {
+        newPlayerData.mistakes = [mistakeRecord, ...newPlayerData.mistakes].slice(0, 30);
       }
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((pData.hp || 100) - dmgTaken <= 0)) {
@@ -319,125 +448,12 @@ export default function App() {
   };
 
   const handleAcknowledgeFeedback = () => {
-    const wasWrong = feedback.isWrong;
-    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    if (wasWrong && combatUI.type !== 'potion') {
-      setWaveState(prev => {
-        const currentEncounter = prev.queue[prev.currentIndex];
-        return { ...prev, queue: [...prev.queue, currentEncounter] };
-      });
-    }
-    handleNext(playerData.hp);
-  };
-
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
-  const handleSortClick = (word, isAvailable, index) => {
-    if(!combatUI.data) return;
-    let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
-    if (isAvailable) {
-      const emptyIdx = newSlots.findIndex(s => s === null); if (emptyIdx === -1) return;
-      newSlots[emptyIdx] = word; newAvailable[index] = null;
-    } else { newSlots[index] = null; newAvailable[newAvailable.findIndex(s => s === null)] = word; }
-    setCombatUI(prev => ({ ...prev, slots: newSlots, data: { ...prev.data, available: newAvailable } }));
-    if (newSlots.filter(s => s !== null).length === 4) {
-      const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
-      const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
-    }
-  };
-  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
-  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
-  const handleMcqClick = (idx) => {
-    if (!combatUI.data) return;
-    processAnswer(idx === combatUI.data.correct, idx === combatUI.data.correct ? 1.5 : 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
-  };
-
-  const handleReadingClick = (idx) => {
-    if(!combatUI.data || !combatUI.data.questions) return;
-    const qData = combatUI.data.questions[combatUI.readingStep];
-
-    // Format option translations to prepend to the explanation
-    const optionsText = qData.optionTranslations && qData.optionTranslations.length > 0
-      ? qData.options.map((opt, i) => `${i + 1}. ${opt} (${qData.optionTranslations[i]})`).join('\n')
-      : '';
-
-    const fullExplanation = optionsText ? `【選項翻譯】\n${optionsText}\n\n【解析】\n${qData.explanation}` : qData.explanation;
-
-    // Pass the translation in the exampleZh field, and a label in the example field
-    const feedbackInfo = {
-      q: qData.q,
-      a: qData.options[qData.correct],
-      exp: fullExplanation,
-      example: '【文章翻譯】',
-      exampleZh: combatUI.data.translation
-    };
-
-    if (idx === qData.correct) {
-      if (combatUI.readingStep < combatUI.data.questions.length - 1) {
-        setCombatUI(prev => ({ ...prev, readingStep: prev.readingStep + 1 }));
-        triggerFx('slash');
-      } else {
-        processAnswer(true, 3, 0, feedbackInfo);
-      }
-    } else {
-      processAnswer(false, 1, 0, feedbackInfo);
-    }
-  };
-
-  const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
-  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(); };
-  const handleSurrender = () => {
-    setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    saveGame({ ...playerData, hp: playerData.maxHp || 100 });
-    showToast("已安全撤退至主終端。", "info"); setScreen('menu');
-  };
-
-  const handleDailyCheckIn = () => {
-    sfx.init();
-    const today = new Date().toISOString().split('T')[0];
-    if (playerData.lastLoginDate === today) return;
-    let newCritRate = playerData.critRate || 0.1, message = "";
-    if (!playerData.lastLoginDate) { newCritRate = 0.2; message = "系統首次連線！爆擊率 +0.1%"; }
-    else {
-      const diffDays = Math.ceil(Math.abs(new Date(today) - new Date(playerData.lastLoginDate)) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; } else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
-    }
-    sfx.playRareChime(false);
-    saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)), gold: (playerData.gold || 0) + 200 });
-    showToast(`${message} 💰獲得 200 G！`, "success");
-  };
-
-  // ==========================================
-  // 抽獎核心運算 (含 UP 權重、保底、變色偽裝)
-  // ==========================================
-  const rollSingleItem = (poolType, currentPity, bannerTheme) => {
-    if (poolType === 'real') {
-      const pool = playerData.gachaPool || DEFAULT_GACHA_POOL;
-      let randomNum = Math.random() * 100, wonItem = null;
-      for (let item of pool) {
-        if (randomNum < Number(item.chance)) { wonItem = item; break; }
-        randomNum -= Number(item.chance);
-      }
-      return { item: wonItem || pool[0], rarity: Number(wonItem?.chance || 10) <= 9 ? 'SSR' : 'N', isDuplicate: false };
-    }
-
-    const isHardPity = currentPity >= 29;
-    let ssrBoost = currentPity >= 20 ? (currentPity - 19) * 5 : 0;
-    let roll = Math.random() * 100;
-
-    let wonItem = null;
-    let pool = [...VIRTUAL_GACHA_POOL];
-
-    if (isHardPity || roll < (8 + ssrBoost)) {
-      const highRarityPool = pool.filter(i => i.rarity === 'UR' || i.rarity === 'SSR');
-
-      if (bannerTheme?.featuredSet) {
-        const featuredItems = highRarityPool.filter(i => i.set === bannerTheme.featuredSet);
-        if (featuredItems.length > 0 && Math.random() < 0.6) {
-          wonItem = featuredItems[Math.floor(Math.random() * featuredItems.length)];
-        }
-      }
-      if (!wonItem) wonItem = highRarityPool[Math.floor(Math.random() * highRarityPool.length)];
+    setFeedback({ show: false });
+    if (playerData.hp <= 0) {
+      let resetData = { ...playerData, hp: playerData.maxHp, ult: 0 };
+      saveGame(resetData);
+      alert("機體損毀，重新啟動系統... (HP已恢復，但 ULT 能量已歸零)");
+      setScreen('menu');
     } else {
       let accum = 0;
       let rand = Math.random() * 100;
@@ -588,16 +604,22 @@ export default function App() {
     return { color: 'text-blue-400', border: 'border-blue-500', bg: 'bg-blue-950', label: '📦 N 階量產型', shadow: 'shadow-[0_0_20px_rgba(59,130,246,0.4)]', ring1: 'border-blue-500/50', ring2: 'border-cyan-500/50', badge: 'bg-blue-900 text-blue-200' };
   };
 
-  const getComboStyle = () => {
-    if (combo >= 6) return 'text-red-500 drop-shadow-[0_0_12px_red] scale-125 animate-pulse';
-    if (combo >= 3) return 'text-yellow-400 drop-shadow-[0_0_8px_yellow] scale-110';
-    return 'text-white scale-100 opacity-80';
-  };
+    let newCritRate = playerData.critRate || 5.0;
+    if (newCritRate < 1) newCritRate = 5.0; // Migrate old 0.1 format
+    
+    let message = "";
+    let isReset = false;
 
-  const renderMonsterEmoji = () => {
-    const isBoss = waveState.currentWave === 3;
-    if (equippedSkin) return isBoss ? equippedSkin.bossEmoji : equippedSkin.emoji;
-    return isBoss ? '💀' : (combatUI.type === 'potion' ? '🧪' : '👾');
+    if (!playerData.lastLoginDate) {
+      newCritRate += 1.0; message = "系統首次連線！爆擊率 +1.0%";
+    } else {
+      const diffDays = Math.ceil(Math.abs(new Date(today) - new Date(playerData.lastLoginDate)) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) { newCritRate += 1.0; message = "連續連線成功！爆擊率 +1.0%"; } 
+      else if (diffDays >= 2) { newCritRate = 5.0; isReset = true; message = `中斷連線！加成歸零，爆擊率重置為 5.0%`; }
+    }
+    saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)) });
+    setCheckInMsg({ text: message, isReset });
+    setTimeout(() => setCheckInMsg(null), 3000);
   };
 
   const renderVFX = () => {
@@ -619,29 +641,23 @@ export default function App() {
   const currentRarityConfig = getRarityConfig(gachaState.displayRarity);
 
   return (
-    <div className={`min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
-
-      <style>{`
-        @keyframes ring-spin-right { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes ring-spin-left { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
-        @keyframes core-shake { 0%, 100% { transform: translate(0, 0) scale(1); } 25% { transform: translate(3px, -3px) scale(1.1); } 50% { transform: translate(-3px, 3px) scale(1.05); } 75% { transform: translate(-3px, -3px) scale(1.15); } }
-        @keyframes flash-white { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 0; } }
-        @keyframes card-pop { 0% { transform: scale(0) translateY(100px) rotate(-10deg); opacity: 0; } 70% { transform: scale(1.08) translateY(-10px) rotate(2deg); opacity: 1; } 100% { transform: scale(1) translateY(0) rotate(0deg); opacity: 1; } }
-        @keyframes text-glow { 0%, 100% { text-shadow: 0 0 10px currentColor, 0 0 20px currentColor; } 50% { text-shadow: 0 0 25px currentColor, 0 0 40px currentColor; } }
-        @keyframes camera-shake { 0%, 100% { transform: translate(0,0); } 20% { transform: translate(-5px, 5px) scale(1.02); } 40% { transform: translate(5px, -5px) scale(1.02); } 60% { transform: translate(-3px, -3px) scale(1.01); } 80% { transform: translate(3px, 3px) scale(1.01); } }
-        @keyframes damage-float { 0% { transform: translateY(0) scale(1); opacity: 1; } 10% { transform: translateY(-20px) scale(1.5); } 100% { transform: translateY(-80px) scale(1); opacity: 0; } }
-        @keyframes shake-error { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 50% { transform: translateX(8px); } 75% { transform: translateX(-8px); } }
-        @keyframes slash-cut { 0% { width: 0; opacity: 1; transform: rotate(-30deg) scale(1); } 50% { width: 150%; opacity: 1; transform: rotate(-30deg) scale(1.5); } 100% { width: 180%; opacity: 0; transform: rotate(-30deg) scale(2); } }
-        @keyframes shield-burst { 0% { transform: scale(0); opacity: 1; } 100% { transform: scale(3); opacity: 0; border-width: 2px; } }
-        @keyframes magic-pillar { 0% { transform: scaleY(0); opacity: 1; } 50% { transform: scaleY(1); opacity: 0.8; } 100% { transform: scaleY(1) scaleX(2); opacity: 0; } }
-        @keyframes upgrade-burst { 0% { transform: scale(0.8); filter: brightness(1); } 50% { transform: scale(1.3); filter: brightness(3); } 100% { transform: scale(1); filter: brightness(1); } }
-      `}</style>
-
-      {/* --- Toast --- */}
-      <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-[100] transition-all duration-300 pointer-events-none w-[90%] max-w-sm ${toast.visible ? 'translate-y-0 opacity-100' : '-translate-y-10 opacity-0'}`}>
-        <div className={`px-5 py-4 rounded-xl font-bold shadow-2xl flex items-center justify-center gap-2 ${toast.type === 'error' ? 'bg-red-600/95 text-white' : (toast.type === 'success' ? 'bg-green-600/95 text-white' : 'bg-cyan-600/95 text-white')}`}>
-          {toast.type === 'error' ? <AlertTriangle size={20} /> : <Info size={20} />}
-          <span className="text-center">{toast.message}</span>
+    <div className="min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 shadow-2xl shadow-cyan-900/20 relative">
+      <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 relative shadow-md">
+        <div className="flex justify-between items-center text-sm">
+          <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> 語譯駭客 N4協議</span>
+          <div className="flex items-center gap-2">
+            {user && !user.isAnonymous ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-green-400 flex items-center gap-1"><UserCircle size={14}/> {user.email?.split('@')[0]}</span>
+                <button onClick={handleLogout} className="text-gray-500 hover:text-red-400" title="登出"><LogOut size={14}/></button>
+              </div>
+            ) : (
+              <button onClick={() => setShowAuthModal(true)} className="flex items-center gap-1 text-xs bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-800 px-2 py-1 rounded text-cyan-300 transition-colors">
+                <UserCircle size={14}/> 訪客 (綁定帳號)
+              </button>
+            )}
+            <span className="text-xs text-gray-600">[{user ? user.uid.substring(0,4) : 'OFF'}]</span>
+          </div>
         </div>
       </div>
 
@@ -676,11 +692,27 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto flex flex-col relative">
-        {screen === 'login' && (
-          <LoginScreen onLogin={handleLoginSuccess} />
-        )}
-        {/* --- 主選單 --- */}
+      {checkInMsg && (
+        <div className={`absolute top-24 left-4 right-4 z-50 p-4 rounded-lg border-2 shadow-xl animate-in slide-in-from-top-4 ${checkInMsg.isReset ? 'bg-red-900/90 border-red-500 text-red-100' : 'bg-green-900/90 border-green-500 text-green-100'}`}>
+          <div className="font-bold flex items-center gap-2">
+            <CalendarCheck /> {checkInMsg.text}
+          </div>
+        </div>
+      )}
+
+      {streakAlert && (
+        <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none bg-black/40 backdrop-blur-sm transition-all duration-300">
+          <div className={`animate-in zoom-in spin-in-12 duration-500 text-center ${streakAlert.color} drop-shadow-[0_0_20px_rgba(255,255,255,0.5)]`}>
+            <div className="text-6xl font-black italic mb-2">{streakAlert.count} 連殺!</div>
+            <div className="text-4xl font-bold tracking-widest bg-gray-900/80 px-6 py-2 rounded-xl border border-current">
+              {streakAlert.title}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="flex-1 overflow-y-auto p-4 flex flex-col relative z-0">
+        
         {screen === 'menu' && (
           <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
 
@@ -708,14 +740,15 @@ export default function App() {
                 )}
               </div>
 
-              {/* 當前啟用的套裝共鳴提示 */}
-              {activeSetBonus && (
-                <div className="bg-cyan-950/40 border border-cyan-600/50 p-3 rounded-xl flex items-center justify-between text-xs">
-                  <div className="flex flex-col">
-                    <span className="text-cyan-300 font-black flex items-center gap-1"><Layers size={14}/> {activeSetBonus.name}</span>
-                    <span className="text-gray-400 mt-0.5">{activeSetBonus.desc}</span>
-                  </div>
-                  <CheckCircle2 size={18} className="text-cyan-400 shrink-0"/>
+            <div className="bg-gray-900/80 p-4 rounded-lg border border-cyan-800 shadow-inner">
+              <h2 className="text-center text-cyan-300 font-bold mb-4 border-b border-cyan-800 pb-2">駭客機體狀態</h2>
+              <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                <div className="flex items-center gap-2 text-red-300"><Zap size={16}/> 攻擊力: {playerData.atk}</div>
+                <div className="flex items-center gap-2 text-blue-300"><Shield size={16}/> 防火牆: {playerData.def}</div>
+                <div className="flex items-center gap-2 text-purple-300"><Target size={16}/> 連殺: {playerData.killStreak || 0}</div>
+                <div className="flex items-center gap-2 text-gray-400"><Target size={16}/> 最高: {playerData.highestStreak || 0}</div>
+                <div className="flex items-center gap-2 text-yellow-300 col-span-2 justify-center bg-yellow-900/20 p-2 rounded border border-yellow-900/50">
+                  <Zap size={16}/> 核心爆擊率: {playerData.critRate.toFixed(1)}%
                 </div>
               )}
 
@@ -727,7 +760,7 @@ export default function App() {
               </div>
               <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === new Date().toISOString().split('T')[0]} className={`w-full p-4 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
                 <CalendarCheck size={18} />
-                {playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
+                {playerData.lastLoginDate === getTodayString() ? '今日已連線' : '每日連線 (+1.0% 爆擊)'}
               </button>
             </div>
 
@@ -735,12 +768,14 @@ export default function App() {
               <Play size={28} /> {purificationRate >= 100 ? '全區域肅清完畢' : '進入作戰 (HP全滿)'}
             </button>
             
-            <div className="grid grid-cols-3 gap-3 mt-4">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備庫</span>
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => setScreen('league')} className="col-span-2 bg-yellow-900/30 hover:bg-yellow-800/40 border border-yellow-500/50 p-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-colors">
+                <Target size={20} className="text-yellow-400"/>
+                <span className="text-sm font-bold text-yellow-200">駭客聯盟 (每週排行)</span>
               </button>
-              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <ShoppingCart className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
+              <button onClick={() => setScreen('reading')} className="bg-purple-900/30 border border-purple-500/50 p-4 rounded-xl flex flex-col items-center gap-2 active:scale-95">
+                <BookOpen size={20} className="text-purple-400"/>
+                <span className="text-sm">解密日誌</span>
               </button>
               <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
                 <Database className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
@@ -1298,7 +1333,87 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {screen === 'league' && (
+          <div className="flex-1 flex flex-col py-4 gap-4">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="text-yellow-400 font-bold text-xl flex items-center gap-2"><Target /> 駭客聯盟排行榜</h2>
+            </div>
+            
+            <div className="bg-gray-900 border border-yellow-900/50 p-4 rounded-xl text-center">
+              <div className="text-sm text-gray-400 mb-1">您目前的階級</div>
+              <div className="text-3xl font-black text-yellow-300 drop-shadow-md mb-2">{playerData.league?.tier || '青銅 (Bronze)'}</div>
+              <div className="text-xs text-gray-500 bg-gray-950 p-2 rounded">
+                結算週期：每週結算一次，前三名晉升，後三名降級。
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto bg-gray-900/50 rounded-xl border border-gray-800 p-2 flex flex-col gap-2">
+              {(() => {
+                const players = [...(playerData.league?.bots || []), { name: '您 (You)', points: playerData.league?.points || 0, isPlayer: true }];
+                players.sort((a, b) => b.points - a.points);
+                
+                return players.map((p, idx) => {
+                  let rankColor = 'text-gray-500';
+                  let bgStyle = p.isPlayer ? 'bg-cyan-900/30 border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-800/40 border-gray-700/50';
+                  
+                  if (idx < 3) rankColor = 'text-green-400';
+                  else if (idx >= players.length - 3) rankColor = 'text-red-400';
+                  else rankColor = 'text-yellow-500';
+
+                  return (
+                    <div key={idx} className={`flex justify-between items-center p-3 rounded-lg border-l-4 ${bgStyle} transition-all`}>
+                      <div className="flex items-center gap-3">
+                        <span className={`font-black w-8 text-center ${rankColor}`}>#{idx + 1}</span>
+                        <span className={`font-bold ${p.isPlayer ? 'text-cyan-300' : 'text-gray-300'}`}>{p.name}</span>
+                      </div>
+                      <div className={`font-mono font-bold ${p.isPlayer ? 'text-cyan-200' : 'text-yellow-500/80'}`}>{p.points} LP</div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+            <button onClick={() => setScreen('menu')} className="mt-auto bg-cyan-900/50 border border-cyan-800 p-3 rounded-lg text-center text-sm text-cyan-200">返回終端機</button>
+          </div>
+        )}
       </main>
+
+      {showAuthModal && (
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-cyan-800 rounded-xl p-6 w-full max-w-sm shadow-[0_0_20px_rgba(6,182,212,0.2)] relative">
+            <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-gray-500 hover:text-cyan-400">
+              <XCircle size={24} />
+            </button>
+            <h2 className="text-xl font-bold mb-6 text-cyan-300 text-center flex items-center justify-center gap-2">
+              <UserCircle />
+              {authMode === 'login' ? '登入系統' : '註冊並綁定進度'}
+            </h2>
+            
+            {authError && <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded-lg text-red-200 text-sm">{authError}</div>}
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-cyan-700 text-xs mb-1">EMAIL 憑證</label>
+                <input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} className="w-full bg-gray-950 border border-cyan-900 rounded-lg p-2.5 text-cyan-100 focus:outline-none focus:border-cyan-500" placeholder="user@example.com" />
+              </div>
+              <div>
+                <label className="block text-cyan-700 text-xs mb-1">授權密碼</label>
+                <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full bg-gray-950 border border-cyan-900 rounded-lg p-2.5 text-cyan-100 focus:outline-none focus:border-cyan-500" placeholder="至少 6 個字元" />
+              </div>
+              <button onClick={handleAuthSubmit} className="w-full bg-cyan-800 hover:bg-cyan-700 text-cyan-100 font-bold py-3 rounded-lg transition-colors mt-2">
+                {authMode === 'login' ? '執行登入' : '註冊帳號 (繼承當前進度)'}
+              </button>
+            </div>
+            
+            <div className="mt-6 text-center text-gray-500 text-sm">
+              {authMode === 'login' ? '未註冊？ ' : '已有帳號？ '}
+              <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-cyan-400 hover:text-cyan-300 font-bold underline">
+                {authMode === 'login' ? '立即註冊' : '切換為登入'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
