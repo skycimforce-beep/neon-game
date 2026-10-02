@@ -271,13 +271,17 @@ export default function App() {
     }
   }, [playerData.league?.weekId]);
 
-  const saveGame = async (newData) => {
-    setPlayerData(newData);
-    if (user && db) {
-      const docRef = doc(db, 'saves', `${SAVE_ID}_${user.uid}`);
-      await setDoc(docRef, newData, { merge: true });
-    }
-  };
+  useEffect(() => {
+    if (screen !== 'battle' || isPaused || feedback.show) return;
+    
+    if (combatUI.timeLeft > 0) {
+      const timerId = setTimeout(() => {
+        setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 }));
+      }, 1000);
+      return () => clearTimeout(timerId);
+    } else {
+      const equippedChip = playerData.gachaPool?.find(i => i.isEquipped);
+      let dmg = combatUI.type === 'boss' ? 30 : 15;
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
@@ -604,6 +608,8 @@ export default function App() {
     return { color: 'text-blue-400', border: 'border-blue-500', bg: 'bg-blue-950', label: '📦 N 階量產型', shadow: 'shadow-[0_0_20px_rgba(59,130,246,0.4)]', ring1: 'border-blue-500/50', ring2: 'border-cyan-500/50', badge: 'bg-blue-900 text-blue-200' };
   };
 
+  const handleDailyCheckIn = () => {
+    const today = new Date().toISOString().split('T')[0];
     let newCritRate = playerData.critRate || 5.0;
     if (newCritRate < 1) newCritRate = 5.0; // Migrate old 0.1 format
     
@@ -659,7 +665,7 @@ export default function App() {
             <span className="text-xs text-gray-600">[{user ? user.uid.substring(0,4) : 'OFF'}]</span>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* --- 抽卡動態展示 (支援 10 連與變色昇格) --- */}
       <GachaModal
@@ -739,6 +745,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
 
             <div className="bg-gray-900/80 p-4 rounded-lg border border-cyan-800 shadow-inner">
               <h2 className="text-center text-cyan-300 font-bold mb-4 border-b border-cyan-800 pb-2">駭客機體狀態</h2>
@@ -750,7 +757,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-yellow-300 col-span-2 justify-center bg-yellow-900/20 p-2 rounded border border-yellow-900/50">
                   <Zap size={16}/> 核心爆擊率: {playerData.critRate.toFixed(1)}%
                 </div>
-              )}
+              </div>
 
               <div className="w-full h-px bg-cyan-900/30"></div>
 
