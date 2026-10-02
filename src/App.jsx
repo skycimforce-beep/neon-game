@@ -64,9 +64,22 @@ const shuffleArray = (array) => {
   return newArr;
 };
 
+const getWeekId = () => {
+  const daysSinceEpoch = Math.floor(new Date().getTime() / (1000 * 60 * 60 * 24));
+  const weekNum = Math.floor((daysSinceEpoch + 3) / 7);
+  return `W${weekNum}`;
+};
+
+const generateBots = () => {
+  const names = ['K1to', 'ZeroCool', 'AcidBurn', 'CrashOverride', 'CerealKiller', 'LordNikon', 'Phantom', 'Ghost', 'Neo', 'Trinity', 'Morpheus', 'Cypher', 'Oracle', 'Smith', 'V', 'Silverhand'];
+  const selected = names.sort(() => 0.5 - Math.random()).slice(0, 9);
+  return selected.map(name => ({ name, points: Math.floor(Math.random() * 50) }));
+};
+
 const DEFAULT_PLAYER_DATA = {
   hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {}, killStreak: 0, highestStreak: 0
+  critRate: 5.0, lastLoginDate: '', readLogs: [], mastery: {}, killStreak: 0, highestStreak: 0,
+  league: { tier: '青銅 (Bronze)', points: 0, weekId: getWeekId(), bots: generateBots() }
 };
 
 export default function App() {
@@ -161,7 +174,8 @@ export default function App() {
           readLogs: data.readLogs || [],
           mastery: data.mastery || {},
           killStreak: data.killStreak || 0,
-          highestStreak: data.highestStreak || 0
+          highestStreak: data.highestStreak || 0,
+          league: data.league || DEFAULT_PLAYER_DATA.league
         });
       } else {
         setPlayerData(DEFAULT_PLAYER_DATA);
@@ -170,6 +184,47 @@ export default function App() {
     });
     return () => unsubscribe();
   }, [user]);
+
+  useEffect(() => {
+    if (!playerData.league) return;
+    const currentWeekId = getWeekId();
+    if (playerData.league.weekId !== currentWeekId) {
+      const allPlayers = [...playerData.league.bots, { name: '您 (You)', points: playerData.league.points }];
+      allPlayers.sort((a, b) => b.points - a.points);
+      const userRank = allPlayers.findIndex(p => p.name === '您 (You)');
+      
+      let newTier = playerData.league.tier;
+      let msg = '';
+      const tiers = ['青銅 (Bronze)', '白銀 (Silver)', '黃金 (Gold)', '菁英 (Elite)'];
+      const currentTierIdx = tiers.indexOf(newTier);
+
+      if (userRank < 3) {
+        if (currentTierIdx < tiers.length - 1) {
+          newTier = tiers[currentTierIdx + 1];
+          msg = `【駭客聯盟結算】\n恭喜！您以第 ${userRank + 1} 名晉升至「${newTier}」階級！`;
+        } else {
+          msg = `【駭客聯盟結算】\n太強了！您以第 ${userRank + 1} 名蟬聯「菁英」霸主！`;
+        }
+      } else if (userRank >= 7) {
+        if (currentTierIdx > 0) {
+          newTier = tiers[currentTierIdx - 1];
+          msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，不幸降級至「${newTier}」階級。`;
+        } else {
+          msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，請在青銅階級繼續努力。`;
+        }
+      } else {
+         msg = `【駭客聯盟結算】\n結算排名第 ${userRank + 1}，成功保級於「${newTier}」。`;
+      }
+
+      alert(msg);
+      
+      const resetData = {
+        ...playerData,
+        league: { tier: newTier, points: 0, weekId: currentWeekId, bots: generateBots() }
+      };
+      saveGame(resetData);
+    }
+  }, [playerData.league?.weekId]);
 
   const saveGame = async (newData) => {
     setPlayerData(newData);
@@ -244,6 +299,14 @@ export default function App() {
       if (newEnemyHp <= 0) {
         if (enemyType === 'normal') newPlayerData.def += 1; else newPlayerData.atk += 2;
         
+        if (newPlayerData.league) {
+          newPlayerData.league.points += (enemyType === 'boss' ? 50 : 20);
+          newPlayerData.league.bots = newPlayerData.league.bots.map(bot => {
+            if (Math.random() > 0.4) return { ...bot, points: bot.points + Math.floor(Math.random() * 30) };
+            return bot;
+          });
+        }
+
         newPlayerData.killStreak = (newPlayerData.killStreak || 0) + 1;
         newPlayerData.highestStreak = Math.max(newPlayerData.highestStreak || 0, newPlayerData.killStreak);
 
@@ -458,6 +521,10 @@ export default function App() {
             </button>
             
             <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => setScreen('league')} className="col-span-2 bg-yellow-900/30 hover:bg-yellow-800/40 border border-yellow-500/50 p-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-colors">
+                <Target size={20} className="text-yellow-400"/>
+                <span className="text-sm font-bold text-yellow-200">駭客聯盟 (每週排行)</span>
+              </button>
               <button onClick={() => setScreen('reading')} className="bg-purple-900/30 border border-purple-500/50 p-4 rounded-xl flex flex-col items-center gap-2 active:scale-95">
                 <BookOpen size={20} className="text-purple-400"/>
                 <span className="text-sm">解密日誌</span>
@@ -619,6 +686,49 @@ export default function App() {
               </div>
             )}
             <button onClick={() => setScreen('menu')} className="mt-4 bg-gray-800 p-3 rounded-lg text-center text-sm text-gray-400">返回終端機</button>
+          </div>
+        )}
+
+        {screen === 'league' && (
+          <div className="flex-1 flex flex-col py-4 gap-4">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="text-yellow-400 font-bold text-xl flex items-center gap-2"><Target /> 駭客聯盟排行榜</h2>
+            </div>
+            
+            <div className="bg-gray-900 border border-yellow-900/50 p-4 rounded-xl text-center">
+              <div className="text-sm text-gray-400 mb-1">您目前的階級</div>
+              <div className="text-3xl font-black text-yellow-300 drop-shadow-md mb-2">{playerData.league?.tier || '青銅 (Bronze)'}</div>
+              <div className="text-xs text-gray-500 bg-gray-950 p-2 rounded">
+                結算週期：每週結算一次，前三名晉升，後三名降級。
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto bg-gray-900/50 rounded-xl border border-gray-800 p-2 flex flex-col gap-2">
+              {(() => {
+                const players = [...(playerData.league?.bots || []), { name: '您 (You)', points: playerData.league?.points || 0, isPlayer: true }];
+                players.sort((a, b) => b.points - a.points);
+                
+                return players.map((p, idx) => {
+                  let rankColor = 'text-gray-500';
+                  let bgStyle = p.isPlayer ? 'bg-cyan-900/30 border-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-800/40 border-gray-700/50';
+                  
+                  if (idx < 3) rankColor = 'text-green-400';
+                  else if (idx >= players.length - 3) rankColor = 'text-red-400';
+                  else rankColor = 'text-yellow-500';
+
+                  return (
+                    <div key={idx} className={`flex justify-between items-center p-3 rounded-lg border-l-4 ${bgStyle} transition-all`}>
+                      <div className="flex items-center gap-3">
+                        <span className={`font-black w-8 text-center ${rankColor}`}>#{idx + 1}</span>
+                        <span className={`font-bold ${p.isPlayer ? 'text-cyan-300' : 'text-gray-300'}`}>{p.name}</span>
+                      </div>
+                      <div className={`font-mono font-bold ${p.isPlayer ? 'text-cyan-200' : 'text-yellow-500/80'}`}>{p.points} LP</div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+            <button onClick={() => setScreen('menu')} className="mt-auto bg-cyan-900/50 border border-cyan-800 p-3 rounded-lg text-center text-sm text-cyan-200">返回終端機</button>
           </div>
         )}
       </main>
