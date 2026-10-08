@@ -166,6 +166,9 @@ export default function App() {
         });
       }
       setIsLoading(false);
+    }, (error) => {
+      console.error("Firestore Error:", error);
+      setIsLoading(false);
     });
     return () => unsubscribe();
   }, [callsign]);
@@ -209,7 +212,7 @@ export default function App() {
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
-      } catch (err) { print("Auth Error", err); }
+      } catch (err) { console.error("Auth Error", err); }
     };
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setUser);
