@@ -29,6 +29,7 @@ const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [email, setEmail] = useState(() => localStorage.getItem('neon_user_email') || null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
   const [screen, setScreen] = useState(() => localStorage.getItem('neon_user_email') ? 'menu' : 'login');
@@ -153,6 +154,12 @@ export default function App() {
 
   useEffect(() => {
     if (!email) return;
+
+    if (!isAuthResolved) {
+      setIsLoading(true);
+      return;
+    }
+
     setIsLoading(true);
 
     const localSave = localStorage.getItem(`neon-game-save_${email}`);
@@ -171,7 +178,8 @@ export default function App() {
       }
     }
 
-    if (!db) {
+    if (!db || !user) {
+      showToast("未登入雲端，目前為本機存檔模式", "info");
       setIsLoading(false);
       return;
     }
@@ -196,7 +204,7 @@ export default function App() {
       setIsLoading(false);
     });
     return () => unsubscribe();
-  }, [email]);
+  }, [email, isAuthResolved, user]);
 
   useEffect(() => {
     if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
@@ -245,14 +253,24 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!auth) { setIsLoading(false); return; }
+    if (!auth) { 
+      setIsAuthResolved(true);
+      setIsLoading(false); 
+      return; 
+    }
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
-      } catch (err) { console.error("Auth Error", err); }
+      } catch (err) { 
+        console.error("Auth Error", err); 
+        setIsAuthResolved(true);
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthResolved(true);
+    });
     return () => unsubscribe();
   }, []);
   const handleLoginSuccess = (enteredEmail) => {
