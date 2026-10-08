@@ -152,23 +152,47 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!email || !db) return;
+    if (!email) return;
     setIsLoading(true);
-    const docRef = doc(db, 'saves', `${SAVE_ID}_${email}`);
-    const unsubscribe = onSnapshot(docRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setPlayerData({
+
+    const localSave = localStorage.getItem(`neon-game-save_${email}`);
+    if (localSave) {
+      try {
+        const data = JSON.parse(localSave);
+        setPlayerData(prev => ({
+          ...prev,
           ...data,
           critRate: data.critRate || 0.1,
           lastLoginDate: data.lastLoginDate || '',
           mastery: data.mastery || {}
-        });
+        }));
+      } catch(e) {
+        console.error("Local save parse error", e);
+      }
+    }
+
+    if (!db) {
+      setIsLoading(false);
+      return;
+    }
+
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${email}`);
+    const unsubscribe = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setPlayerData(prev => ({
+          ...prev,
+          ...data,
+          critRate: data.critRate || 0.1,
+          lastLoginDate: data.lastLoginDate || '',
+          mastery: data.mastery || {}
+        }));
+        localStorage.setItem(`neon-game-save_${email}`, JSON.stringify(data));
       }
       setIsLoading(false);
     }, (error) => {
       console.error("Firestore Error:", error);
-      showToast("系統初始化失敗，請檢查網路連線", "error");
+      showToast("無法連線至雲端，已啟用本機存檔模式", "info");
       setIsLoading(false);
     });
     return () => unsubscribe();
@@ -197,7 +221,19 @@ export default function App() {
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (email && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${email}`), newData, { merge: true }); };
+  const saveGame = async (newData) => { 
+    setPlayerData(newData); 
+    if (email) {
+      localStorage.setItem(`neon-game-save_${email}`, JSON.stringify(newData));
+      if (db) {
+        try {
+          await setDoc(doc(db, 'saves', `${SAVE_ID}_${email}`), newData, { merge: true }); 
+        } catch (err) {
+          console.error("Firebase sync failed", err);
+        }
+      }
+    }
+  };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
