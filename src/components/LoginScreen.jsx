@@ -3,7 +3,7 @@ import { Fingerprint, LogIn, Hexagon } from 'lucide-react';
 import { sfx } from '../utils/soundFX';
 
 export const LoginScreen = ({ onLogin }) => {
-  const [callsign, setCallsign] = useState('');
+  const [email, setEmail] = useState('');
   const [bootText, setBootText] = useState('');
   const [isBooting, setIsBooting] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -29,14 +29,14 @@ export const LoginScreen = ({ onLogin }) => {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (!callsign.trim()) return;
+    if (!email.trim()) return;
 
     setIsLoggingIn(true);
     sfx.playCharge(1.5); // 1.5 seconds charge sound
 
     // Add screen shake effect and transition to menu
     setTimeout(() => {
-      onLogin(callsign.trim());
+      onLogin(email.trim());
     }, 1500);
   };
 
@@ -73,19 +73,19 @@ export const LoginScreen = ({ onLogin }) => {
           <div className="relative">
             <Fingerprint className="absolute left-3 top-1/2 -translate-y-1/2 text-cyan-600" size={20} />
             <input
-              type="text"
-              value={callsign}
-              onChange={(e) => setCallsign(e.target.value)}
-              placeholder="輸入幹員代號 (Callsign)..."
-              className="w-full bg-gray-950/80 border-2 border-cyan-900 focus:border-cyan-400 text-cyan-100 pl-10 pr-4 py-4 font-mono font-bold text-sm tracking-widest focus:outline-none focus:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all uppercase placeholder:text-gray-700 skew-x-[-2deg]"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="輸入 Email 信箱綁定..."
+              className="w-full bg-gray-950/80 border-2 border-cyan-900 focus:border-cyan-400 text-cyan-100 pl-10 pr-4 py-4 font-mono font-bold text-sm tracking-widest focus:outline-none focus:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all placeholder:text-gray-700 skew-x-[-2deg]"
               autoFocus
-              maxLength={12}
+              required
             />
           </div>
 
           <button
             type="submit"
-            disabled={!callsign.trim() || isLoggingIn}
+            disabled={!email.trim() || isLoggingIn}
             className={`relative group overflow-hidden w-full py-4 bg-cyan-950 border border-cyan-700 text-cyan-300 font-black tracking-widest transition-all hover:bg-cyan-900 hover:text-white hover:border-cyan-400 hover:shadow-[0_0_20px_rgba(6,182,212,0.5)] skew-x-[-2deg] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-cyan-400/20 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />

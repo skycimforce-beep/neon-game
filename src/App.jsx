@@ -29,9 +29,9 @@ const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [callsign, setCallsign] = useState(null);
+  const [email, setEmail] = useState(() => localStorage.getItem('neon_user_email') || null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
-  const [screen, setScreen] = useState('login');
+  const [screen, setScreen] = useState(() => localStorage.getItem('neon_user_email') ? 'menu' : 'login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   
@@ -152,9 +152,9 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!callsign || !db) return;
+    if (!email || !db) return;
     setIsLoading(true);
-    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${email}`);
     const unsubscribe = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -168,10 +168,11 @@ export default function App() {
       setIsLoading(false);
     }, (error) => {
       console.error("Firestore Error:", error);
+      showToast("系統初始化失敗，請檢查網路連線", "error");
       setIsLoading(false);
     });
     return () => unsubscribe();
-  }, [callsign]);
+  }, [email]);
 
   useEffect(() => {
     if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
@@ -196,7 +197,7 @@ export default function App() {
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (callsign && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true }); };
+  const saveGame = async (newData) => { setPlayerData(newData); if (email && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${email}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -218,8 +219,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);
-  const handleLoginSuccess = (enteredCallsign) => {
-    setCallsign(enteredCallsign);
+  const handleLoginSuccess = (enteredEmail) => {
+    localStorage.setItem('neon_user_email', enteredEmail);
+    setEmail(enteredEmail);
     setScreen('menu');
   };
 
@@ -661,7 +663,7 @@ export default function App() {
         <div className="flex justify-between items-center text-sm">
           <div className="flex flex-col">
             <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
-            {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
+            {email && <span className="text-xs text-gray-500 font-mono">USER: {email}</span>}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => { setSoundEnabled(!soundEnabled); sfx.enabled = !soundEnabled; }} className="text-gray-400 hover:text-white p-1">
