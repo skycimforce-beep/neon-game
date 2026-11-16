@@ -170,12 +170,14 @@ export default function App() {
     }
     if (encounter.type === 'vocab') {
       const hasKanji = encounter.data.ch.includes('[');
+      const usedWords = new Set([encounter.data.ch]);
       if (!hasKanji) {
         // Pure-kana words test Chinese meaning so the answer isn't identical to the question
         const usedUsages = new Set([encounter.data.usage]);
         const wrongUsages = [];
         for (const v of shuffle(VOCAB_DATA)) {
-          if (v.id !== encounter.data.id && v.usage && !usedUsages.has(v.usage)) {
+          if (v.id !== encounter.data.id && !usedWords.has(v.ch) && v.usage && !usedUsages.has(v.usage)) {
+            usedWords.add(v.ch);
             usedUsages.add(v.usage);
             wrongUsages.push(v.usage);
             if (wrongUsages.length >= 3) break;
@@ -191,7 +193,8 @@ export default function App() {
         const wrongReadings = [];
         for (const v of shuffle(VOCAB_DATA)) {
           const ans = v.answers?.[0];
-          if (v.id !== encounter.data.id && ans && !usedReadings.has(ans)) {
+          if (v.id !== encounter.data.id && !usedWords.has(v.ch) && ans && !usedReadings.has(ans)) {
+            usedWords.add(v.ch);
             usedReadings.add(ans);
             wrongReadings.push(ans);
             if (wrongReadings.length >= 3) break;
@@ -203,6 +206,18 @@ export default function App() {
           options: shuffle([encounter.data.answers[0], ...wrongReadings])
         };
       }
+    }
+    if (encounter.type === 'potion') {
+      const indexedOptions = encounter.data.options.map((opt, idx) => ({
+        opt,
+        isCorrect: idx === encounter.data.correct
+      }));
+      const shuffledOptions = shuffle(indexedOptions);
+      uiState.data = {
+        ...encounter.data,
+        options: shuffledOptions.map(item => item.opt),
+        correct: shuffledOptions.findIndex(item => item.isCorrect)
+      };
     }
     if (encounter.type === 'sort') {
       uiState.slots = [null, null, null, null];
@@ -641,8 +656,12 @@ export default function App() {
     }
     setCombatUI(prev => ({ ...prev, slots: newSlots, data: { ...prev.data, available: newAvailable } }));
     if (newSlots.filter(s => s !== null).length === 4) {
-      const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
-      const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
+      const validOrders = [combatUI.data.correctOrder, ...(combatUI.data.acceptedOrders || [])];
+      const userSentence = newSlots.join('');
+      const matchedOrder = validOrders.find(order => order.map(idx => combatUI.data.parts[idx]).join('') === userSentence);
+      const displayOrder = matchedOrder || combatUI.data.correctOrder;
+      const correctSentence = displayOrder.map(idx => combatUI.data.parts[idx]).join('');
+      const correctSentenceDisplay = displayOrder.map(idx => combatUI.data.parts[idx]).join(' ');
       const fullSentence = combatUI.data.context.includes('／')
         ? combatUI.data.context.replace('／', correctSentence)
         : `${combatUI.data.context}${correctSentence}`;
@@ -650,7 +669,7 @@ export default function App() {
       const fullExp = grammarNote
         ? `${grammarNote}\n\n【中譯】${combatUI.data.translation}`
         : combatUI.data.translation;
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, {
+      processAnswer(Boolean(matchedOrder), 2, 0, {
         q: combatUI.data.context,
         a: correctSentenceDisplay,
         exp: fullExp,
