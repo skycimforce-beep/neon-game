@@ -1,9 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Fingerprint, LogIn, Hexagon } from 'lucide-react';
 import { sfx } from '../utils/soundFX';
 
 export const LoginScreen = ({ onLogin }) => {
-  const [callsign, setCallsign] = useState('');
+  const [callsign, setCallsign] = useState(() => {
+    try {
+      return localStorage.getItem('neon_game_last_callsign') || '';
+    } catch {
+      return '';
+    }
+  });
   const [bootText, setBootText] = useState('');
   const [isBooting, setIsBooting] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -12,31 +18,40 @@ export const LoginScreen = ({ onLogin }) => {
 
   useEffect(() => {
     let currentLength = 0;
+    let bootDoneTimer = null;
     const interval = setInterval(() => {
       currentLength++;
       setBootText(fullBootSequence.substring(0, currentLength));
       if (currentLength >= fullBootSequence.length) {
         clearInterval(interval);
-        setTimeout(() => setIsBooting(false), 500);
+        bootDoneTimer = setTimeout(() => setIsBooting(false), 500);
       }
     }, 20); // typing speed
 
     // Play a subtle sound on mount
     sfx.init();
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (bootDoneTimer) clearTimeout(bootDoneTimer);
+    };
   }, []);
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (!callsign.trim()) return;
+    const trimmed = callsign.trim();
+    if (!trimmed) return;
+
+    try {
+      localStorage.setItem('neon_game_last_callsign', trimmed);
+    } catch { /* ignore storage errors */ }
 
     setIsLoggingIn(true);
     sfx.playCharge(1.5); // 1.5 seconds charge sound
 
     // Add screen shake effect and transition to menu
     setTimeout(() => {
-      onLogin(callsign.trim());
+      onLogin(trimmed);
     }, 1500);
   };
 

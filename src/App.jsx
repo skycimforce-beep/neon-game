@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
+import { tts } from './utils/tts';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
@@ -27,13 +28,32 @@ try {
 const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
+const VOCAB_IDS = new Set(VOCAB_DATA.map(q => q.id));
+const SORT_IDS = new Set(GRAMMAR_SORT_DATA.map(q => q.id));
+const TYPE_IDS = new Set(GRAMMAR_TYPE_DATA.map(q => q.id));
+const MCQ_IDS = new Set(GRAMMAR_MCQ_DATA.map(q => q.id));
+const READING_IDS = new Set(READING_DATA.map(q => q.id));
+const VALID_ENEMY_IDS = new Set([...VOCAB_IDS, ...SORT_IDS, ...TYPE_IDS, ...MCQ_IDS, ...READING_IDS]);
+
+const PRACTICE_MODES = [
+  { id: 'mixed', label: '綜合闖關', desc: '全題型 3 波挑戰' },
+  { id: 'vocab', label: '單字特訓', desc: '讀音＋詞義辨析' },
+  { id: 'sort', label: '文法重組', desc: '句子結構排序' },
+  { id: 'type', label: '動詞變化', desc: '活用形詠唱輸入' },
+  { id: 'mcq', label: '文法選擇', desc: 'N4 句型接續測驗' },
+  { id: 'reading', label: '閱讀理解', desc: '長文閱讀分析' }
+];
+
 export default function App() {
   const [user, setUser] = useState(null);
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [callsign, setCallsign] = useState(null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [practiceMode, setPracticeMode] = useState('mixed');
+  const [relaxedMode, setRelaxedMode] = useState(false);
   
   const [playerData, setPlayerData] = useState({
     hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
@@ -43,11 +63,14 @@ export default function App() {
     pityCount: 0,
     dataCores: 0
   });
+  const playerDataRef = useRef(playerData);
+  useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
 
-  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false });
-  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 60 });
+  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, mode: 'mixed' });
+  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
   const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
   const [isPaused, setIsPaused] = useState(false);
+  const isAnsweringRef = useRef(false);
 
   const [shopTab, setShopTab] = useState('gacha');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
@@ -82,10 +105,10 @@ export default function App() {
   const triggerFx = (type) => { setCombatFx(type); setTimeout(() => setCombatFx(null), 500); };
   const triggerScreenShake = () => { setScreenShake(true); setTimeout(() => setScreenShake(false), 300); };
 
-  const TOTAL_ENEMIES = VOCAB_DATA.length + GRAMMAR_SORT_DATA.length + GRAMMAR_TYPE_DATA.length + READING_DATA.length + GRAMMAR_MCQ_DATA.length;
+  const TOTAL_ENEMIES = VALID_ENEMY_IDS.size;
   const masteryObj = playerData.mastery || {};
-  const masteredCount = Object.values(masteryObj).filter(c => c >= 3).length;
-  const purificationRate = Math.floor((masteredCount / TOTAL_ENEMIES) * 100);
+  const masteredCount = Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VALID_ENEMY_IDS.has(id)).length;
+  const purificationRate = Math.min(100, Math.floor((masteredCount / TOTAL_ENEMIES) * 100));
 
   const equippedVFX = VIRTUAL_GACHA_POOL.find(i => i.id === playerData.equipped?.vfx) || null;
   const equippedSkin = VIRTUAL_GACHA_POOL.find(i => i.id === playerData.equipped?.skin) || null;
@@ -112,16 +135,47 @@ export default function App() {
 
   const loadEncounter = (encounter) => {
     if (!encounter) return;
-    const baseTime = 60 + (equippedChip?.id === 'chip_cyber' ? 10 : 0);
+    isAnsweringRef.current = false;
+    const baseTime = 120 + (equippedChip?.id === 'chip_cyber' ? 20 : 0);
     let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
     if (encounter.type === 'mcq') {
       uiState.data = encounter.data;
     }
     if (encounter.type === 'vocab') {
-      let options = [encounter.data.answers[0]];
-      let wrongPool = shuffle(VOCAB_DATA.filter(v => v.id !== encounter.data.id)).map(v => v.answers[0]);
-      options = shuffle([...options, ...wrongPool.slice(0, 3)]);
-      uiState.data = { ...encounter.data, options };
+      const hasKanji = encounter.data.ch.includes('[');
+      if (!hasKanji) {
+        // Pure-kana words test Chinese meaning so the answer isn't identical to the question
+        const usedUsages = new Set([encounter.data.usage]);
+        const wrongUsages = [];
+        for (const v of shuffle(VOCAB_DATA)) {
+          if (v.id !== encounter.data.id && v.usage && !usedUsages.has(v.usage)) {
+            usedUsages.add(v.usage);
+            wrongUsages.push(v.usage);
+            if (wrongUsages.length >= 3) break;
+          }
+        }
+        uiState.data = {
+          ...encounter.data,
+          vocabMode: 'meaning',
+          options: shuffle([encounter.data.usage, ...wrongUsages])
+        };
+      } else {
+        const usedReadings = new Set([encounter.data.answers[0]]);
+        const wrongReadings = [];
+        for (const v of shuffle(VOCAB_DATA)) {
+          const ans = v.answers?.[0];
+          if (v.id !== encounter.data.id && ans && !usedReadings.has(ans)) {
+            usedReadings.add(ans);
+            wrongReadings.push(ans);
+            if (wrongReadings.length >= 3) break;
+          }
+        }
+        uiState.data = {
+          ...encounter.data,
+          vocabMode: 'reading',
+          options: shuffle([encounter.data.answers[0], ...wrongReadings])
+        };
+      }
     }
     if (encounter.type === 'sort') {
       uiState.slots = [null, null, null, null];
@@ -130,70 +184,205 @@ export default function App() {
     setCombatUI(uiState);
   };
 
-  const startWaveRun = () => {
+  const buildMistakesQueue = () => {
+    const mistakes = playerData.mistakes || [];
+    const queue = [];
+    const seen = new Set();
+    mistakes.forEach((m) => {
+      let item = null;
+      let type = m.type || null;
+
+      if (m.id) {
+        if (VOCAB_IDS.has(m.id)) { type = 'vocab'; item = VOCAB_DATA.find(x => x.id === m.id); }
+        else if (SORT_IDS.has(m.id)) { type = 'sort'; item = GRAMMAR_SORT_DATA.find(x => x.id === m.id); }
+        else if (TYPE_IDS.has(m.id)) { type = 'type'; item = GRAMMAR_TYPE_DATA.find(x => x.id === m.id); }
+        else if (MCQ_IDS.has(m.id)) { type = 'mcq'; item = GRAMMAR_MCQ_DATA.find(x => x.id === m.id); }
+        else if (READING_IDS.has(m.id)) { type = 'reading'; item = READING_DATA.find(x => x.id === m.id); }
+      }
+
+      if (!item && m.q) {
+        const vMatch = VOCAB_DATA.find(x => x.ch === m.q);
+        const gsMatch = GRAMMAR_SORT_DATA.find(x => x.context === m.q);
+        const gtMatch = GRAMMAR_TYPE_DATA.find(x => x.prompt === m.q);
+        const gmMatch = GRAMMAR_MCQ_DATA.find(x => x.question === m.q);
+        const rMatch = READING_DATA.find(x => x.questions?.some(rq => rq.q === m.q));
+        if (vMatch) { type = 'vocab'; item = vMatch; }
+        else if (gsMatch) { type = 'sort'; item = gsMatch; }
+        else if (gtMatch) { type = 'type'; item = gtMatch; }
+        else if (gmMatch) { type = 'mcq'; item = gmMatch; }
+        else if (rMatch) { type = 'reading'; item = rMatch; }
+      }
+
+      if (item && type && !seen.has(item.id)) {
+        seen.add(item.id);
+        queue.push({ wave: type === 'reading' ? 3 : (type === 'vocab' ? 1 : 2), type, data: item });
+      }
+    });
+    return shuffle(queue).slice(0, 10);
+  };
+
+  const startWaveRun = (modeOverride = null) => {
     sfx.init();
-    const w1Vocab = getUnmastered(VOCAB_DATA, 4).map(q => ({ wave: 1, type: 'vocab', data: q }));
-    const potionQ = Math.random() > 0.4 ? getUnmastered(POTION_DATA, 1).map(q => ({ wave: 1, type: 'potion', data: q })) : [];
-    const w2Sort = getUnmastered(GRAMMAR_SORT_DATA, 2).map(q => ({ wave: 2, type: 'sort', data: q }));
-    const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 1).map(q => ({ wave: 2, type: 'type', data: q }));
-    const w2Mcq = getUnmastered(GRAMMAR_MCQ_DATA, 2).map(q => ({ wave: 2, type: 'mcq', data: q }));
-    const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
-    const fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w2Mcq, ...w3Reading];
+    const targetMode = typeof modeOverride === 'string' ? modeOverride : practiceMode;
+    let fullQueue;
+
+    if (targetMode === 'mistakes') {
+      fullQueue = buildMistakesQueue();
+      if (fullQueue.length === 0) return showToast("目前沒有可複習的錯題！", "info");
+    } else if (targetMode === 'vocab') {
+      fullQueue = getUnmastered(VOCAB_DATA, 6).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'vocab', data: q }));
+    } else if (targetMode === 'sort') {
+      fullQueue = getUnmastered(GRAMMAR_SORT_DATA, 5).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'sort', data: q }));
+    } else if (targetMode === 'type') {
+      fullQueue = getUnmastered(GRAMMAR_TYPE_DATA, 5).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'type', data: q }));
+    } else if (targetMode === 'mcq') {
+      fullQueue = getUnmastered(GRAMMAR_MCQ_DATA, 6).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'mcq', data: q }));
+    } else if (targetMode === 'reading') {
+      fullQueue = getUnmastered(READING_DATA, 2).map(q => ({ wave: 3, type: 'reading', data: q }));
+    } else {
+      const w1Vocab = getUnmastered(VOCAB_DATA, 4).map(q => ({ wave: 1, type: 'vocab', data: q }));
+      const potionQ = Math.random() > 0.4 ? getUnmastered(POTION_DATA, 1).map(q => ({ wave: 1, type: 'potion', data: q })) : [];
+      const w2Sort = getUnmastered(GRAMMAR_SORT_DATA, 2).map(q => ({ wave: 2, type: 'sort', data: q }));
+      const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 1).map(q => ({ wave: 2, type: 'type', data: q }));
+      const w2Mcq = getUnmastered(GRAMMAR_MCQ_DATA, 2).map(q => ({ wave: 2, type: 'mcq', data: q }));
+      const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
+      fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w2Mcq, ...w3Reading];
+    }
 
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
+    isAnsweringRef.current = false;
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
     setCombo(0);
-    setWaveState({ isActive: true, currentWave: 1, queue: fullQueue, currentIndex: 0, shieldUsed: false });
+    setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, mode: targetMode });
     setIsPaused(false);
     loadEncounter(fullQueue[0]);
     setScreen('battle');
   };
 
-
   useEffect(() => {
-    if (!callsign || !db) return;
-    setIsLoading(true);
-    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
-    const unsubscribe = onSnapshot(docRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setPlayerData({
-          ...data,
-          critRate: data.critRate || 0.1,
-          lastLoginDate: data.lastLoginDate || '',
-          mastery: data.mastery || {}
-        });
+    if (!callsign || !isAuthResolved) return;
+
+    // Load local backup immediately to avoid blocking
+    try {
+      const localRaw = localStorage.getItem(`neon_game_save_${callsign}`);
+      if (localRaw) {
+        const localData = JSON.parse(localRaw);
+        setPlayerData(prev => ({
+          ...prev,
+          ...localData,
+          critRate: localData.critRate || 0.1,
+          lastLoginDate: localData.lastLoginDate || '',
+          mastery: localData.mastery || {}
+        }));
       }
+    } catch { /* ignore localStorage parse errors */ }
+
+    if (!db || !user) {
       setIsLoading(false);
-    });
-    return () => unsubscribe();
-  }, [callsign]);
+      return;
+    }
+
+    setIsLoading(true);
+    const safetyTimer = setTimeout(() => setIsLoading(false), 4000);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
+    const unsubscribe = onSnapshot(
+      docRef,
+      (snapshot) => {
+        clearTimeout(safetyTimer);
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          const merged = {
+            ...playerDataRef.current,
+            ...data,
+            critRate: data.critRate || 0.1,
+            lastLoginDate: data.lastLoginDate || '',
+            mastery: data.mastery || {}
+          };
+          setPlayerData(merged);
+          try {
+            localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(merged));
+          } catch { /* ignore storage errors */ }
+        }
+        setIsLoading(false);
+      },
+      (err) => {
+        clearTimeout(safetyTimer);
+        console.error("Firestore Snapshot Error:", err);
+        setIsLoading(false);
+      }
+    );
+    return () => {
+      clearTimeout(safetyTimer);
+      unsubscribe();
+    };
+  }, [callsign, isAuthResolved, user]);
+
+  const saveGame = async (newData) => {
+    playerDataRef.current = newData;
+    setPlayerData(newData);
+    if (callsign) {
+      try {
+        localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(newData));
+      } catch { /* ignore storage errors */ }
+    }
+    if (callsign && db && user) {
+      try {
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true });
+      } catch (err) {
+        console.error("Cloud save failed, kept in localStorage:", err);
+      }
+    }
+  };
 
   useEffect(() => {
+    if (relaxedMode) return;
     if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
       const timer = setTimeout(() => setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 })), 1000);
       return () => clearTimeout(timer);
-    } else if (combatUI.timeLeft === 0 && !feedback.show && !isPaused && screen === 'battle') {
-      let dmg = Math.floor((playerData.maxHp || 100) * 0.5);
+    } else if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft === 0 && !feedback.show && !isPaused) {
+      let dmg = Math.floor((playerData.maxHp || 100) * 0.3);
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
-        dmg = (playerData.hp || 100) - 1;
+        dmg = Math.max(0, (playerData.hp || 100) - 1);
         showToast("🛡️ 量子鎖血晶片生效！強制保留 1 HP！", "success");
       }
 
       sfx.playError();
-      setPlayerData(prev => ({ ...prev, hp: Math.max(0, (prev.hp || 100) - dmg) }));
       triggerScreenShake();
       setCombo(0);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。', exampleZh: '' });
-      setCombatUI(prev => ({ ...prev, timeLeft: 60 }));
+
+      const pData = { ...playerDataRef.current };
+      pData.hp = Math.max(0, (pData.hp || 100) - dmg);
+      if (combatUI.data) {
+        pData.mastery = { ...(pData.mastery || {}), [combatUI.data.id]: 0 };
+        const qData = combatUI.data.questions?.[combatUI.readingStep];
+        if (qData) {
+          const mistakeEntry = {
+            id: combatUI.data.id,
+            type: 'reading',
+            q: qData.q,
+            a: qData.options[qData.correct],
+            exp: qData.explanation,
+            example: '【文章翻譯】',
+            exampleZh: combatUI.data.translation
+          };
+          const currentMistakes = pData.mistakes || [];
+          if (!currentMistakes.find(m => m.q === mistakeEntry.q)) {
+            pData.mistakes = [mistakeEntry, ...currentMistakes].slice(0, 100);
+          }
+        }
+      }
+      saveGame(pData);
+
+      const resetTime = 120 + (equippedChip?.id === 'chip_cyber' ? 20 : 0);
+      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！可切換「休閒學習模式」關閉時間限制。', correct: '時間耗盡', example: '請加快閱讀理解或利用暫停鍵思考文章內容。', exampleZh: '' });
+      setCombatUI(prev => ({ ...prev, timeLeft: resetTime }));
     }
-  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
+  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, relaxedMode]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (callsign && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -202,17 +391,26 @@ export default function App() {
     }
   }, [secretClicks]);
 
-
-
   useEffect(() => {
-    if (!auth) { setIsLoading(false); return; }
+    if (!auth) {
+      setIsAuthResolved(true);
+      setIsLoading(false);
+      return;
+    }
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
-      } catch (err) { print("Auth Error", err); }
+      } catch (err) {
+        console.error("Auth Error", err);
+      } finally {
+        setIsAuthResolved(true);
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthResolved(true);
+    });
     return () => unsubscribe();
   }, []);
   const handleLoginSuccess = (enteredCallsign) => {
@@ -220,36 +418,47 @@ export default function App() {
     setScreen('menu');
   };
 
-  const handleNext = (newHp) => {
+  const handleNext = (newHp, requeuedCurrent = false) => {
     if (newHp <= 0) {
       showToast("系統崩潰... 返回主終端機。", "error");
-      saveGame({ ...playerData, hp: playerData.maxHp || 100 });
+      saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
+      tts.stop();
       setScreen('menu'); return;
     }
+    const effectiveQueue = requeuedCurrent && waveState.queue[waveState.currentIndex]
+      ? [...waveState.queue, waveState.queue[waveState.currentIndex]]
+      : waveState.queue;
+
     const nextIndex = waveState.currentIndex + 1;
-    if (nextIndex >= waveState.queue.length) {
-      let earnedGold = 500;
+    if (nextIndex >= effectiveQueue.length) {
+      const baseGold = waveState.mode === 'mixed' ? 500 : (waveState.mode === 'reading' ? 300 : 250);
+      let earnedGold = baseGold;
       if (equippedSkin?.buff?.includes('金幣')) earnedGold += 100;
       if (activeSetBonus && activeSetBonus.name.includes('櫻華')) earnedGold = Math.floor(earnedGold * 1.4);
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
 
       showToast(`🎉 區域肅清！獲得 ${earnedGold} G 學習津貼！`, "success");
-      saveGame({ ...playerData, hp: playerData.maxHp || 100, gold: (playerData.gold || 0) + earnedGold, bossKills: (playerData.bossKills || 0) + 1 });
+      const latest = playerDataRef.current;
+      saveGame({ ...latest, hp: latest.maxHp || 100, gold: (latest.gold || 0) + earnedGold, bossKills: (latest.bossKills || 0) + 1 });
+      tts.stop();
       setScreen('menu');
     } else {
-      const nextEncounter = waveState.queue[nextIndex];
-      let currentHp = newHp;
+      const nextEncounter = effectiveQueue[nextIndex];
       if (activeSetBonus && activeSetBonus.name.includes('量子駭客')) {
-        currentHp = Math.min(playerData.maxHp || 100, currentHp + 10);
+        const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + 10);
+        if (healedHp !== newHp) {
+          saveGame({ ...playerDataRef.current, hp: healedHp });
+        }
       }
-      setWaveState(prev => ({ ...prev, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
+      setWaveState(prev => ({ ...prev, queue: effectiveQueue, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
       loadEncounter(nextEncounter);
     }
   };
 
   const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
-    if (isPaused) return;
-    let pData = { ...playerData };
+    if (isPaused || isAnsweringRef.current) return;
+    isAnsweringRef.current = true;
+    let pData = { ...playerDataRef.current, mastery: { ...(playerDataRef.current.mastery || {}) } };
     
     if (isCorrect) {
       sfx.playHit();
@@ -269,6 +478,14 @@ export default function App() {
       if (combatUI.type !== 'potion' && combatUI.data) {
         pData.mastery[combatUI.data.id] = (pData.mastery[combatUI.data.id] || 0) + 1;
         pData.vocabKills = (pData.vocabKills || 0) + 1;
+
+        if (waveState.mode === 'mistakes') {
+          const prevLen = (pData.mistakes || []).length;
+          pData.mistakes = (pData.mistakes || []).filter(m => m.id !== combatUI.data.id && m.q !== mistakeInfo?.q);
+          if (pData.mistakes.length < prevLen) {
+            showToast("✅ 已攻克錯題！自動移出錯誤日誌", "success");
+          }
+        }
       }
 
       if (combatUI.type === 'potion') {
@@ -285,6 +502,7 @@ export default function App() {
       saveGame(pData);
       if (mistakeInfo) {
         setTimeout(() => {
+          isAnsweringRef.current = false;
           setFeedback({ show: true, isWrong: false, damageTaken: 0, text: mistakeInfo.exp || '', correct: mistakeInfo.a || '', example: mistakeInfo.example || '', exampleZh: mistakeInfo.exampleZh || '' });
         }, 800);
       } else {
@@ -295,7 +513,9 @@ export default function App() {
       setCombo(0);
       triggerScreenShake();
 
-      let dmgTaken = combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2));
+      let dmgTaken = relaxedMode
+        ? 5
+        : (combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2)));
 
       if (activeSetBonus && activeSetBonus.name.includes('櫻華')) {
         dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.8));
@@ -309,35 +529,55 @@ export default function App() {
 
       pData.hp = Math.max(0, (pData.hp || 100) - dmgTaken);
       if (combatUI.type !== 'potion' && combatUI.data) pData.mastery[combatUI.data.id] = 0;
-      if (mistakeInfo) {
+      if (mistakeInfo && combatUI.type !== 'potion') {
+        const entry = { id: combatUI.data?.id, type: combatUI.type, ...mistakeInfo };
         const currentMistakes = pData.mistakes || [];
-        if (!currentMistakes.find(m => m.q === mistakeInfo.q)) pData.mistakes = [mistakeInfo, ...currentMistakes].slice(0, 30);
+        const exists = currentMistakes.find(m => (entry.id && m.id === entry.id) || m.q === entry.q);
+        if (!exists) pData.mistakes = [entry, ...currentMistakes].slice(0, 100);
       }
       saveGame(pData);
+      isAnsweringRef.current = false;
       setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', exampleZh: mistakeInfo?.exampleZh || '' });
     }
   };
 
   const handleAcknowledgeFeedback = () => {
+    tts.stop();
     const wasWrong = feedback.isWrong;
+    const shouldRequeue = wasWrong && combatUI.type !== 'potion';
     setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    if (wasWrong && combatUI.type !== 'potion') {
+    if (shouldRequeue) {
       setWaveState(prev => {
         const currentEncounter = prev.queue[prev.currentIndex];
         return { ...prev, queue: [...prev.queue, currentEncounter] };
       });
     }
-    handleNext(playerData.hp);
+    handleNext(playerDataRef.current.hp, shouldRequeue);
   };
 
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handleVocabClick = (opt) => {
+    if (!combatUI.data) return;
+    const isMeaningMode = combatUI.data.vocabMode === 'meaning';
+    const expected = isMeaningMode ? combatUI.data.usage : combatUI.data.answers[0];
+    const correctDisplay = isMeaningMode ? `${combatUI.data.answers[0]}（${combatUI.data.usage}）` : combatUI.data.answers[0];
+    processAnswer(opt === expected, 1, 0, {
+      q: combatUI.data.ch,
+      a: correctDisplay,
+      exp: combatUI.data.usage,
+      example: combatUI.data.example,
+      exampleZh: combatUI.data.exampleZh
+    });
+  };
   const handleSortClick = (word, isAvailable, index) => {
-    if(!combatUI.data) return;
+    if (!combatUI.data || isAnsweringRef.current) return;
     let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
     if (isAvailable) {
       const emptyIdx = newSlots.findIndex(s => s === null); if (emptyIdx === -1) return;
       newSlots[emptyIdx] = word; newAvailable[index] = null;
-    } else { newSlots[index] = null; newAvailable[newAvailable.findIndex(s => s === null)] = word; }
+    } else {
+      if (!newSlots[index]) return;
+      newSlots[index] = null; newAvailable[newAvailable.findIndex(s => s === null)] = word;
+    }
     setCombatUI(prev => ({ ...prev, slots: newSlots, data: { ...prev.data, available: newAvailable } }));
     if (newSlots.filter(s => s !== null).length === 4) {
       const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
@@ -345,7 +585,14 @@ export default function App() {
       processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
     }
   };
-  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handleTypeSubmit = (e) => {
+    e.preventDefault();
+    if (!combatUI.data) return;
+    const userInput = combatUI.inputValue.trim().replace(/\u3000/g, ' ');
+    const accepted = combatUI.data.acceptedAnswers || [combatUI.data.correct];
+    const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
+    processAnswer(accepted.includes(userInput), 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+  };
   const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
@@ -353,7 +600,7 @@ export default function App() {
   };
 
   const handleReadingClick = (idx) => {
-    if(!combatUI.data || !combatUI.data.questions) return;
+    if(!combatUI.data || !combatUI.data.questions || isAnsweringRef.current) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
 
     // Format option translations to prepend to the explanation
@@ -385,10 +632,12 @@ export default function App() {
   };
 
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
-  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(); };
+  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(waveState.mode); };
   const handleSurrender = () => {
     setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    saveGame({ ...playerData, hp: playerData.maxHp || 100 });
+    isAnsweringRef.current = false;
+    tts.stop();
+    saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
     showToast("已安全撤退至主終端。", "info"); setScreen('menu');
   };
 
@@ -466,7 +715,9 @@ export default function App() {
     }
 
     const currentBanner = BANNER_THEMES[activeBannerIdx];
-    let tempPity = playerData.pityCount || 0;
+    const latestPlayer = playerDataRef.current;
+    let tempPity = latestPlayer.pityCount || 0;
+    const ownedOrPulledIds = new Set((latestPlayer.inventory || []).map(inv => inv?.id).filter(Boolean));
     let results = [];
     let hasUR = false, hasSSR = false, hasR = false;
 
@@ -474,10 +725,20 @@ export default function App() {
       if (count === 10 && i === 9 && !hasR && !hasSSR && !hasUR && poolType === 'virtual') {
         const rPool = VIRTUAL_GACHA_POOL.filter(item => item.rarity === 'R' || item.rarity === 'SSR' || item.rarity === 'UR');
         const forced = rPool[Math.floor(Math.random() * rPool.length)];
-        const isDup = (playerData.inventory || []).some(inv => inv?.id === forced.id);
+        const isDup = ownedOrPulledIds.has(forced.id);
+        ownedOrPulledIds.add(forced.id);
         results.push({ item: forced, rarity: forced.rarity, isDuplicate: isDup });
+        if (forced.rarity === 'UR' || forced.rarity === 'SSR') {
+          tempPity = 0;
+        } else {
+          tempPity += 1;
+        }
       } else {
         const res = rollSingleItem(poolType, tempPity, currentBanner);
+        if (poolType === 'virtual' && res.item?.id) {
+          res.isDuplicate = ownedOrPulledIds.has(res.item.id);
+          ownedOrPulledIds.add(res.item.id);
+        }
         results.push(res);
         if (poolType === 'virtual') {
           if (res.rarity === 'UR' || res.rarity === 'SSR') {
@@ -526,7 +787,8 @@ export default function App() {
 
       setGachaState(prev => ({ ...prev, status: 'revealed' }));
 
-      let addedInventory = [...(playerData.inventory || [])];
+      const currentData = playerDataRef.current;
+      let addedInventory = [...(currentData.inventory || [])];
       let gainedCores = 0;
       let refundGold = 0;
 
@@ -550,12 +812,12 @@ export default function App() {
       }
 
       saveGame({
-        ...playerData,
-        gold: (playerData.gold || 0) - cost + refundGold,
+        ...currentData,
+        gold: (currentData.gold || 0) - cost + refundGold,
         inventory: addedInventory,
         pityCount: tempPity,
-        dataCores: (playerData.dataCores || 0) + gainedCores,
-        gachaHistory: [...newHistory, ...(playerData.gachaHistory || [])].slice(0, 60)
+        dataCores: (currentData.dataCores || 0) + gainedCores,
+        gachaHistory: [...newHistory, ...(currentData.gachaHistory || [])].slice(0, 60)
       });
 
       if (gainedCores > 0) {
@@ -661,7 +923,7 @@ export default function App() {
             {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => { setSoundEnabled(!soundEnabled); sfx.enabled = !soundEnabled; }} className="text-gray-400 hover:text-white p-1">
+            <button onClick={() => { const next = !soundEnabled; setSoundEnabled(next); sfx.enabled = next; tts.enabled = next; if (!next) tts.stop(); }} className="text-gray-400 hover:text-white p-1" title="切換音效與日語發音">
               {soundEnabled ? <Volume2 size={16}/> : <VolumeX size={16}/>}
             </button>
             <span className="text-rose-400 text-xs font-bold bg-rose-950/60 px-2 py-1 rounded border border-rose-800"><Hexagon size={12} className="inline mr-1"/>{playerData.dataCores || 0}</span>
@@ -699,11 +961,11 @@ export default function App() {
                 </div>
                 {showDetailedProgress && (
                   <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 text-xs text-gray-400 flex flex-col gap-1 mt-2 animate-in slide-in-from-top-2">
-                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && VOCAB_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {VOCAB_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_SORT_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_SORT_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_TYPE_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_MCQ_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && READING_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {READING_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
                   </div>
                 )}
               </div>
@@ -731,18 +993,46 @@ export default function App() {
               </button>
             </div>
 
-            <button onClick={startWaveRun} disabled={purificationRate >= 100} className={`bg-cyan-900/50 border border-cyan-400 p-6 rounded-xl flex items-center justify-center gap-3 text-xl font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform ${purificationRate >= 100 ? 'opacity-50' : ''}`}>
-              <Play size={28} /> {purificationRate >= 100 ? '全區域肅清完畢' : '進入作戰 (HP全滿)'}
+            {/* 訓練單元選擇 & 休閒模式切換 */}
+            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={14}/> 選擇練習單元</span>
+                <button
+                  onClick={() => setRelaxedMode(!relaxedMode)}
+                  className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                >
+                  {relaxedMode ? '☕ 休閒學習：不限時 / 失誤僅扣5HP' : '⏱️ 標準模式 (點擊切換休閒)'}
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {PRACTICE_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setPracticeMode(m.id)}
+                    className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                  >
+                    <div>{m.label}</div>
+                    <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-5 rounded-xl flex items-center justify-center gap-3 text-xl font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
+              <Play size={26} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
             </button>
             
-            <div className="grid grid-cols-3 gap-3 mt-4">
+            <div className="grid grid-cols-3 gap-3 mt-1">
               <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
                 <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備庫</span>
               </button>
               <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
                 <ShoppingCart className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
               </button>
-              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
+              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                {(playerData.mistakes || []).length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full">{(playerData.mistakes || []).length}</span>
+                )}
                 <Database className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
               </button>
             </div>
@@ -913,24 +1203,51 @@ export default function App() {
                  </div>
 
                  {waveState.currentWave === 3 && combatUI.type === 'reading' && (
-                   <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
-                     <Clock size={20} className={isPaused || feedback.show ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
-                   </div>
+                   relaxedMode ? (
+                     <div className="flex items-center gap-2 text-cyan-300 font-bold bg-cyan-950/70 px-4 py-1.5 rounded-full text-sm mt-4 border border-cyan-500/40 z-10">
+                       ☕ 休閒學習模式（無時間限制）
+                     </div>
+                   ) : (
+                     <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
+                       <Clock size={20} className={isPaused || feedback.show ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                     </div>
+                   )
                  )}
                </div>
 
                <div className="flex-1 flex flex-col justify-end gap-4 pb-4">
                  {combatUI.type === 'vocab' && (
                    <div className="animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-5xl font-black mb-8 tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose pt-4"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
-                     <div className="grid grid-cols-2 gap-3">
-                       {(combatUI.data.options || []).map((opt, i) => (<button key={i} onClick={() => handleVocabClick(opt)} className="bg-gray-800 border-2 border-cyan-900 p-5 rounded-xl text-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold"><RubyText text={opt} showRuby={false} /></button>))}
+                     <div className="text-center text-xs font-bold text-cyan-400 tracking-wider mb-1">
+                       {combatUI.data.vocabMode === 'meaning' ? '📖 請選擇正確中文意思' : '🔤 請選擇正確讀音'}
+                     </div>
+                     <div className="flex items-center justify-center gap-3 mb-8 pt-2">
+                       <div className="text-center text-5xl font-black tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
+                       {tts.isSupported() && (
+                         <button type="button" onClick={() => tts.speak(combatUI.data.ch)} title="朗讀單字" className="p-2.5 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/60 text-cyan-300 active:scale-90 transition-transform shrink-0">
+                           <Volume2 size={20} />
+                         </button>
+                       )}
+                     </div>
+                     <div className={`grid gap-3 ${combatUI.data.vocabMode === 'meaning' ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                       {(combatUI.data.options || []).map((opt, i) => (
+                         <button key={i} onClick={() => handleVocabClick(opt)} className={`bg-gray-800 border-2 border-cyan-900 p-4 sm:p-5 rounded-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold ${combatUI.data.vocabMode === 'meaning' ? 'text-base sm:text-lg text-left' : 'text-xl text-center'}`}>
+                           <RubyText text={opt} showRuby={false} />
+                         </button>
+                       ))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'sort' && (
                    <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-gray-300 text-xl font-bold bg-gray-900/50 p-3 rounded-lg leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                     <div className="flex items-center justify-center gap-2 bg-gray-900/50 p-3 rounded-lg">
+                       <div className="text-center text-gray-300 text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                       {tts.isSupported() && (
+                         <button type="button" onClick={() => tts.speak(combatUI.data.context)} title="朗讀題幹" className="p-2 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform shrink-0">
+                           <Volume2 size={16} />
+                         </button>
+                       )}
+                     </div>
                      <div className="flex justify-center gap-2">
                        {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`w-20 h-16 rounded-lg border-2 flex items-center justify-center text-sm transition-all leading-loose ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-105' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={false}/></button>))}
                      </div>
@@ -942,7 +1259,12 @@ export default function App() {
                  {combatUI.type === 'type' && (
                    <form onSubmit={handleTypeSubmit} className="flex flex-col gap-4 animate-in slide-in-from-bottom-4">
                      <div className="text-center text-xl font-bold bg-gray-900 p-4 rounded-lg border border-gray-700 leading-loose"><RubyText text={combatUI.data.prompt} showRuby={false} /></div>
-                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
+                     {combatUI.data.base && (
+                       <div className="text-center text-xs text-cyan-400 font-bold">
+                         💡 支援漢字或平假名輸入（提示詞：{combatUI.data.base}）
+                       </div>
+                     )}
+                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
                      <button type="submit" className="bg-cyan-700 text-white p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
                    </form>
                  )}
@@ -969,7 +1291,14 @@ export default function App() {
                  )}
                  {combatUI.type === 'reading' && (
                    <div className="flex flex-col gap-4 overflow-y-auto max-h-[60vh] animate-in fade-in">
-                     <div className="bg-gray-900 border border-red-900/50 p-5 rounded-xl text-base text-gray-200 leading-[2.5] shadow-inner"><RubyText text={combatUI.data.text} showRuby={false} /></div>
+                     <div className="bg-gray-900 border border-red-900/50 p-5 rounded-xl text-base text-gray-200 leading-[2.5] shadow-inner">
+                       {tts.isSupported() && (
+                         <button type="button" onClick={() => tts.speak(combatUI.data.text)} title="朗讀文章" className="float-right ml-2 mb-1 p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                           <Volume2 size={14} /> 朗讀
+                         </button>
+                       )}
+                       <RubyText text={combatUI.data.text} showRuby={false} />
+                     </div>
                      <div className="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
                        <p className="font-bold text-cyan-200 text-lg mb-5 leading-loose"><RubyText text={combatUI.data.questions[combatUI.readingStep].q} showRuby={false} /></p>
                        <div className="flex flex-col gap-3">
@@ -996,11 +1325,30 @@ export default function App() {
                     </h3>
                   </div>
                   <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
-                    {feedback.correct && (<div><span className="text-sm text-gray-400 font-bold block mb-2">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span><div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div></div>)}
+                    {feedback.correct && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-400 font-bold">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span>
+                          {tts.isSupported() && feedback.correct !== '時間耗盡' && (
+                            <button type="button" onClick={() => tts.speak(feedback.correct.split('（')[0].split(' / ')[0])} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                              <Volume2 size={14} /> 發音
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div>
+                      </div>
+                    )}
                     {feedback.text && (<div><span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span><div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]"><RubyText text={feedback.text} showRuby={true} /></div></div>)}
                     {feedback.example && (
                       <div>
-                        <span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-400 font-bold">🗣️ 應用範例</span>
+                          {tts.isSupported() && feedback.example !== '【文章翻譯】' && (
+                            <button type="button" onClick={() => tts.speak(feedback.example)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-yellow-700/50 text-yellow-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                              <Volume2 size={14} /> 朗讀例句
+                            </button>
+                          )}
+                        </div>
                         <div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose">
                           <RubyText text={feedback.example} showRuby={true} />
                           {feedback.exampleZh && <div className="text-sm text-gray-400 mt-2 font-normal border-t border-yellow-900/30 pt-2">{feedback.exampleZh}</div>}
@@ -1283,13 +1631,59 @@ export default function App() {
         {/* --- 錯誤日誌 --- */}
         {screen === 'records' && (
           <div className="flex-1 p-4 flex flex-col">
-            <h2 className="text-orange-400 font-black text-2xl mb-6 flex items-center gap-2"><Database /> 錯誤日誌</h2>
+            <div className="flex items-center justify-between mb-6 gap-2">
+              <h2 className="text-orange-400 font-black text-2xl flex items-center gap-2"><Database /> 錯誤日誌</h2>
+              <button
+                onClick={() => startWaveRun('mistakes')}
+                disabled={(playerData.mistakes || []).length === 0}
+                className="bg-orange-600 hover:bg-orange-500 disabled:bg-gray-800 disabled:text-gray-600 text-white px-4 py-2 rounded-xl font-black text-sm flex items-center gap-1.5 shadow-lg active:scale-95 transition-transform"
+              >
+                <Flame size={16} /> 錯題特訓 ({(playerData.mistakes || []).length})
+              </button>
+            </div>
             <div className="overflow-y-auto flex-1 gap-4 flex flex-col pb-4">
               {(playerData.mistakes || []).length === 0 ? <div className="text-gray-500 text-center mt-10 font-bold">完美通關，尚無錯誤紀錄</div> : null}
               {(playerData.mistakes || []).map((m, i) => (
-                <div key={i} className="bg-gray-900 p-5 rounded-2xl border border-orange-900/40 shadow-sm">
-                  <div className="font-black text-xl mb-3 text-gray-200 leading-loose"><RubyText text={m.q} showRuby={true}/></div>
-                  <div className="text-base text-green-400 font-bold bg-green-950/30 px-3 py-2 rounded-lg inline-block border border-green-900/50 leading-loose">✅ <RubyText text={m.a} showRuby={true}/></div>
+                <div key={m.id || i} className="bg-gray-900 p-5 rounded-2xl border border-orange-900/40 shadow-sm flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-black text-xl text-gray-200 leading-loose flex-1"><RubyText text={m.q} showRuby={true}/></div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {tts.isSupported() && m.a && (
+                        <button
+                          type="button"
+                          onClick={() => tts.speak(m.a.split('（')[0].split(' / ')[0])}
+                          title="朗讀正解"
+                          className="p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform"
+                        >
+                          <Volume2 size={16} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (playerData.mistakes || []).filter((_, idx) => idx !== i);
+                          saveGame({ ...playerDataRef.current, mistakes: updated });
+                          showToast("已從錯誤日誌移除", "info");
+                        }}
+                        title="已掌握／移除"
+                        className="p-2 rounded-lg bg-gray-800 hover:bg-red-950 border border-gray-700 hover:border-red-700/60 text-gray-400 hover:text-red-400 active:scale-90 transition-transform"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-base text-green-400 font-bold bg-green-950/30 px-3 py-2 rounded-lg inline-block border border-green-900/50 leading-loose self-start">✅ <RubyText text={m.a} showRuby={true}/></div>
+                  {m.exp && (
+                    <div className="text-sm text-gray-300 bg-gray-800/80 p-3 rounded-xl leading-relaxed whitespace-pre-wrap">
+                      📝 <RubyText text={m.exp} showRuby={true} />
+                    </div>
+                  )}
+                  {(m.example || m.exampleZh) && (
+                    <div className="text-sm text-yellow-300 bg-yellow-950/20 p-3 rounded-xl border border-yellow-900/40 leading-loose">
+                      {m.example && <div>🗣️ <RubyText text={m.example} showRuby={true} /></div>}
+                      {m.exampleZh && <div className="text-xs text-gray-400 mt-1">{m.exampleZh}</div>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
