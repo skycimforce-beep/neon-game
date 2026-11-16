@@ -20,6 +20,7 @@ class JapaneseTTS {
     const cleanText = stripRuby(rawText)
       .replace(/／/g, '、')
       .replace(/___/g, ' ')
+      .replace(/(^|[\s、。/])[～〜]+/g, '$1')
       .trim();
     if (!cleanText) return;
 
@@ -39,6 +40,15 @@ class JapaneseTTS {
     } catch (err) {
       console.warn('TTS playback failed:', err);
     }
+  }
+
+  speakAnswer(rawAnswer, rate = 0.9) {
+    if (!rawAnswer || typeof rawAnswer !== 'string') return;
+    const stripped = stripRuby(rawAnswer)
+      .split('（')[0]
+      .split(' / ')[0]
+      .trim();
+    this.speak(stripped, rate);
   }
 }
 

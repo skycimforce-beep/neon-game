@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Fingerprint, LogIn, Hexagon } from 'lucide-react';
 import { sfx } from '../utils/soundFX';
 
@@ -13,6 +13,7 @@ export const LoginScreen = ({ onLogin }) => {
   const [bootText, setBootText] = useState('');
   const [isBooting, setIsBooting] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const loginTimerRef = useRef(null);
 
   const fullBootSequence = "INITIATING SYSTEM...\nCONNECTING TO MAINFRAME...\nBYPASSING SECURITY...\nACCESS GRANTED.";
 
@@ -34,11 +35,13 @@ export const LoginScreen = ({ onLogin }) => {
     return () => {
       clearInterval(interval);
       if (bootDoneTimer) clearTimeout(bootDoneTimer);
+      if (loginTimerRef.current) clearTimeout(loginTimerRef.current);
     };
   }, []);
 
   const handleLogin = (e) => {
     e.preventDefault();
+    if (isLoggingIn || isBooting) return;
     const trimmed = callsign.trim();
     if (!trimmed) return;
 
@@ -50,7 +53,8 @@ export const LoginScreen = ({ onLogin }) => {
     sfx.playCharge(1.5); // 1.5 seconds charge sound
 
     // Add screen shake effect and transition to menu
-    setTimeout(() => {
+    loginTimerRef.current = setTimeout(() => {
+      loginTimerRef.current = null;
       onLogin(trimmed);
     }, 1500);
   };

@@ -4,7 +4,7 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
   if (gachaState.status === 'idle') return null;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden touch-none">
+    <div className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden">
       <div className="absolute inset-0 bg-black/95 backdrop-blur-md transition-opacity duration-500" />
 
       {(gachaState.status === 'charging' || gachaState.status === 'upgrading') && (
@@ -39,7 +39,7 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
           </div>
 
           {/* 抽卡結果卡牌清單 */}
-          <div className={`w-full overflow-y-auto max-h-[68vh] p-2 flex flex-col gap-2.5 my-auto ${gachaState.results.length > 1 ? 'grid grid-cols-2 gap-2' : ''}`}>
+          <div className={`w-full overflow-y-auto touch-pan-y max-h-[68vh] p-2 flex flex-col gap-2.5 my-auto ${gachaState.results.length > 1 ? 'grid grid-cols-2 gap-2' : ''}`}>
             {gachaState.results.map((res, i) => {
               const cfg = getRarityConfig(res.rarity);
               const itemName = res.item.item || res.item;

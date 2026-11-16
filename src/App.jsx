@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
 import { tts } from './utils/tts';
+import { toHiragana } from './utils/ruby';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
@@ -244,7 +245,7 @@ export default function App() {
         queue.push({ wave: type === 'reading' ? 3 : (type === 'vocab' ? 1 : 2), type, data: item });
       }
     });
-    return shuffle(queue).slice(0, 10);
+    return shuffle(queue).slice(0, 10).sort((a, b) => a.wave - b.wave);
   };
 
   const startWaveRun = (modeOverride = null) => {
@@ -254,7 +255,13 @@ export default function App() {
 
     if (targetMode === 'mistakes') {
       fullQueue = buildMistakesQueue();
-      if (fullQueue.length === 0) return showToast("目前沒有可複習的錯題！", "info");
+      if (fullQueue.length === 0) {
+        if (screen === 'battle') {
+          setScreen('menu');
+          return showToast("🎉 所有錯題皆已攻克完畢！", "success");
+        }
+        return showToast("目前沒有可複習的錯題！", "info");
+      }
     } else if (targetMode === 'vocab') {
       fullQueue = getUnmastered(VOCAB_DATA, 6).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'vocab', data: q }));
     } else if (targetMode === 'sort') {
@@ -294,13 +301,15 @@ export default function App() {
       const localRaw = localStorage.getItem(`neon_game_save_${callsign}`);
       if (localRaw) {
         const localData = JSON.parse(localRaw);
-        setPlayerData(prev => ({
-          ...prev,
+        const mergedLocal = {
+          ...playerDataRef.current,
           ...localData,
           critRate: localData.critRate || 0.1,
           lastLoginDate: localData.lastLoginDate || '',
           mastery: localData.mastery || {}
-        }));
+        };
+        playerDataRef.current = mergedLocal;
+        setPlayerData(mergedLocal);
       }
     } catch { /* ignore localStorage parse errors */ }
 
@@ -316,15 +325,26 @@ export default function App() {
       docRef,
       (snapshot) => {
         clearTimeout(safetyTimer);
+        if (snapshot.metadata.hasPendingWrites) {
+          setIsLoading(false);
+          return;
+        }
         if (snapshot.exists()) {
           const data = snapshot.data();
+          const currentLocal = playerDataRef.current;
+          const isLocalNewer = (currentLocal.updatedAt || 0) > (data.updatedAt || 0);
+          const mergedMastery = { ...(data.mastery || {}), ...(currentLocal.mastery || {}) };
+          Object.keys(mergedMastery).forEach((k) => {
+            mergedMastery[k] = Math.max(data.mastery?.[k] || 0, currentLocal.mastery?.[k] || 0);
+          });
+          const base = isLocalNewer ? { ...data, ...currentLocal } : { ...currentLocal, ...data };
           const merged = {
-            ...playerDataRef.current,
-            ...data,
-            critRate: data.critRate || 0.1,
-            lastLoginDate: data.lastLoginDate || '',
-            mastery: data.mastery || {}
+            ...base,
+            critRate: base.critRate || 0.1,
+            lastLoginDate: base.lastLoginDate || '',
+            mastery: mergedMastery
           };
+          playerDataRef.current = merged;
           setPlayerData(merged);
           try {
             localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(merged));
@@ -345,16 +365,17 @@ export default function App() {
   }, [callsign, isAuthResolved, user]);
 
   const saveGame = async (newData) => {
-    playerDataRef.current = newData;
-    setPlayerData(newData);
+    const stampedData = { ...newData, updatedAt: Date.now() };
+    playerDataRef.current = stampedData;
+    setPlayerData(stampedData);
     if (callsign) {
       try {
-        localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(newData));
+        localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(stampedData));
       } catch { /* ignore storage errors */ }
     }
     if (callsign && db && user) {
       try {
-        await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true });
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), stampedData, { merge: true });
       } catch (err) {
         console.error("Cloud save failed, kept in localStorage:", err);
       }
@@ -592,12 +613,6 @@ export default function App() {
     const wasWrong = feedback.isWrong;
     const shouldRequeue = wasWrong && combatUI.type !== 'potion';
     setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    if (shouldRequeue) {
-      setWaveState(prev => {
-        const currentEncounter = prev.queue[prev.currentIndex];
-        return { ...prev, queue: [...prev.queue, currentEncounter] };
-      });
-    }
     handleNext(playerDataRef.current.hp, shouldRequeue);
   };
 
@@ -646,11 +661,17 @@ export default function App() {
   };
   const handleTypeSubmit = (e) => {
     e.preventDefault();
-    if (!combatUI.data) return;
+    if (!combatUI.data || isAnsweringRef.current) return;
     const userInput = combatUI.inputValue.trim().replace(/\u3000/g, ' ');
+    if (!userInput) {
+      showToast("請先輸入答案！", "info");
+      return;
+    }
     const accepted = combatUI.data.acceptedAnswers || [combatUI.data.correct];
     const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
-    processAnswer(accepted.includes(userInput), 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+    const userHira = toHiragana(userInput);
+    const isCorrect = accepted.includes(userInput) || accepted.some(a => toHiragana(a) === userHira);
+    processAnswer(isCorrect, 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
   const handlePotionClick = (idx) => {
     if (!combatUI.data) return;
@@ -693,6 +714,7 @@ export default function App() {
 
     if (idx === qData.correct) {
       if (combatUI.readingStep < combatUI.data.questions.length - 1) {
+        sfx.playHit();
         setCombatUI(prev => ({ ...prev, readingStep: prev.readingStep + 1 }));
         triggerFx('slash');
       } else {
@@ -808,7 +830,7 @@ export default function App() {
     for (let i = 0; i < count; i++) {
       if (count === 10 && i === 9 && !hasR && !hasSSR && !hasUR && poolType === 'virtual') {
         const rPool = VIRTUAL_GACHA_POOL.filter(item => item.rarity === 'R' || item.rarity === 'SSR' || item.rarity === 'UR');
-        const forced = rPool[Math.floor(Math.random() * rPool.length)];
+        const forced = pickWeightedItem(rPool);
         const isDup = ownedOrPulledIds.has(forced.id);
         ownedOrPulledIds.add(forced.id);
         results.push({ item: forced, rarity: forced.rarity, isDuplicate: isDup });
@@ -965,7 +987,7 @@ export default function App() {
   const currentRarityConfig = getRarityConfig(gachaState.displayRarity);
 
   return (
-    <div className={`min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
 
       <style>{`
         @keyframes ring-spin-right { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1022,7 +1044,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto flex flex-col relative">
+      <main className="flex-1 min-h-0 overflow-y-auto flex flex-col relative">
         {screen === 'login' && (
           <LoginScreen onLogin={handleLoginSuccess} />
         )}
@@ -1125,10 +1147,10 @@ export default function App() {
 
         {/* --- 裝備庫 --- */}
         {screen === 'loadout' && (
-          <div className="flex-1 p-4 flex flex-col h-full bg-gray-950">
+          <div className="flex-1 min-h-0 p-4 flex flex-col h-full bg-gray-950">
             <h2 className="text-blue-400 font-black text-2xl mb-2 flex items-center gap-2 shrink-0"><Backpack /> 虛擬裝備圖鑑</h2>
 
-            <div className="mb-4 bg-gray-900 border border-gray-800 p-3 rounded-xl">
+            <div className="mb-4 bg-gray-900 border border-gray-800 p-3 rounded-xl shrink-0">
               <div className="text-xs text-gray-400 font-bold mb-1 flex items-center gap-1">
                 <Layers size={14}/> 當前套裝共鳴狀態：
               </div>
@@ -1143,7 +1165,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto flex flex-col gap-6 pb-4">
+            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-6 pb-4">
               
               {/* 戰術晶片區塊 */}
               <div className="flex flex-col gap-3">
@@ -1260,8 +1282,8 @@ export default function App() {
 
         {/* --- 戰鬥畫面 --- */}
         {screen === 'battle' && combatUI.data && (
-           <div className="flex-1 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10">
+           <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-2">
                  <span className="font-bold text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
                  <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
@@ -1273,7 +1295,7 @@ export default function App() {
                {combo > 1 && (<div className={`font-black italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
              </div>
 
-             <div className={`flex-1 flex flex-col transition-opacity duration-300 ${isPaused || feedback.show ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
+             <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
                <div className="relative flex flex-col items-center justify-center my-auto min-h-[160px]">
                  {renderVFX()}
 
@@ -1323,33 +1345,47 @@ export default function App() {
                    </div>
                  )}
                  {combatUI.type === 'sort' && (
-                   <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4">
-                     <div className="flex items-center justify-center gap-2 bg-gray-900/50 p-3 rounded-lg">
-                       <div className="text-center text-gray-300 text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
-                       {tts.isSupported() && (
-                         <button type="button" onClick={() => tts.speak(combatUI.data.context)} title="朗讀題幹" className="p-2 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform shrink-0">
-                           <Volume2 size={16} />
-                         </button>
+                   <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4">
+                     <div className="flex flex-col items-center justify-center gap-1.5 bg-gray-900/50 p-3 rounded-lg border border-gray-800">
+                       <div className="flex items-center justify-center gap-2">
+                         <div className="text-center text-gray-200 text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                         {tts.isSupported() && (
+                           <button type="button" onClick={() => tts.speak(combatUI.data.context)} title="朗讀題幹" className="p-2 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform shrink-0">
+                             <Volume2 size={16} />
+                           </button>
+                         )}
+                       </div>
+                       {combatUI.data.translation && (
+                         <div className="text-xs sm:text-sm text-cyan-300/90 font-bold text-center">
+                           🎯 句意：{combatUI.data.translation}
+                         </div>
                        )}
                      </div>
-                     <div className="flex justify-center gap-2">
-                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`w-20 h-16 rounded-lg border-2 flex items-center justify-center text-sm transition-all leading-loose ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-105' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={false}/></button>))}
+                     <div className="flex justify-center gap-1.5 sm:gap-2">
+                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`flex-1 min-w-0 min-h-[4rem] px-1.5 py-1 rounded-lg border-2 flex items-center justify-center text-xs sm:text-sm text-center break-all transition-all leading-snug ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-[1.02]' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={false}/></button>))}
                      </div>
-                     <div className="grid grid-cols-2 gap-3 mt-4">
-                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-loose ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={false} /></button>))}
+                     <div className="grid grid-cols-2 gap-3 mt-2">
+                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-3.5 sm:p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-snug break-all ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={false} /></button>))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'type' && (
-                   <form onSubmit={handleTypeSubmit} className="flex flex-col gap-4 animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-xl font-bold bg-gray-900 p-4 rounded-lg border border-gray-700 leading-loose"><RubyText text={combatUI.data.prompt} showRuby={false} /></div>
+                   <form onSubmit={handleTypeSubmit} className="flex flex-col gap-3.5 animate-in slide-in-from-bottom-4">
+                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2">
+                       <div className="text-center text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.prompt} showRuby={false} /></div>
+                       {combatUI.data.exampleZh && (
+                         <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2">
+                           🎯 目標句意：{combatUI.data.exampleZh}
+                         </div>
+                       )}
+                     </div>
                      {combatUI.data.base && (
                        <div className="text-center text-xs text-cyan-400 font-bold">
-                         💡 支援漢字或平假名輸入（提示詞：{combatUI.data.base}）
+                         💡 支援漢字或平假名輸入（原形：{combatUI.data.base}）
                        </div>
                      )}
-                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
-                     <button type="submit" className="bg-cyan-700 text-white p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
+                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-4 sm:p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
+                     <button type="submit" className="bg-cyan-700 text-white p-4 sm:p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
                    </form>
                  )}
                  {combatUI.type === 'mcq' && (
@@ -1357,8 +1393,8 @@ export default function App() {
                      <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={false} /></div>
                      <div className="grid grid-cols-1 gap-2 mt-4">
                        {combatUI.data.options.map((opt, idx) => (
-                         <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold">
-                           <RubyText text={opt} showRuby={false} />
+                         <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold leading-loose">
+                           <RubyText text={opt} showRuby={true} />
                          </button>
                        ))}
                      </div>
@@ -1366,10 +1402,17 @@ export default function App() {
                  )}
                  {combatUI.type === 'potion' && (
                    <div className="flex flex-col h-full animate-in zoom-in-95">
-                     <div className="text-center text-xl font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                     <div className="mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg border border-gray-800 flex flex-col gap-2">
+                       <div className="text-center text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                       {combatUI.data.translation && (
+                         <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2">
+                           🎯 句意：{combatUI.data.translation}
+                         </div>
+                       )}
+                     </div>
                      <div className="flex gap-4 mt-8">
-                       <button onClick={() => handlePotionClick(0)} className="flex-1 bg-red-900/40 border-2 border-red-500/50 p-8 rounded-2xl flex flex-col items-center gap-2 active:bg-red-800/60 active:scale-90 transition-transform"><span className="text-2xl font-bold"><RubyText text={combatUI.data.options[0]} showRuby={false} /></span></button>
-                       <button onClick={() => handlePotionClick(1)} className="flex-1 bg-blue-900/40 border-2 border-blue-500/50 p-8 rounded-2xl flex flex-col items-center gap-2 active:bg-blue-800/60 active:scale-90 transition-transform"><span className="text-2xl font-bold"><RubyText text={combatUI.data.options[1]} showRuby={false} /></span></button>
+                       <button onClick={() => handlePotionClick(0)} className="flex-1 bg-red-900/40 border-2 border-red-500/50 p-6 sm:p-8 rounded-2xl flex flex-col items-center justify-center gap-2 active:bg-red-800/60 active:scale-90 transition-transform"><span className="text-xl sm:text-2xl font-bold text-center break-all"><RubyText text={combatUI.data.options[0]} showRuby={false} /></span></button>
+                       <button onClick={() => handlePotionClick(1)} className="flex-1 bg-blue-900/40 border-2 border-blue-500/50 p-6 sm:p-8 rounded-2xl flex flex-col items-center justify-center gap-2 active:bg-blue-800/60 active:scale-90 transition-transform"><span className="text-xl sm:text-2xl font-bold text-center break-all"><RubyText text={combatUI.data.options[1]} showRuby={false} /></span></button>
                      </div>
                    </div>
                  )}
@@ -1414,7 +1457,7 @@ export default function App() {
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm text-gray-400 font-bold">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span>
                           {tts.isSupported() && feedback.correct !== '時間耗盡' && (
-                            <button type="button" onClick={() => tts.speak(feedback.correct.split('（')[0].split(' / ')[0])} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                            <button type="button" onClick={() => tts.speakAnswer(feedback.correct)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
                               <Volume2 size={14} /> 發音
                             </button>
                           )}
@@ -1466,7 +1509,7 @@ export default function App() {
 
         {/* --- 商城 --- */}
         {screen === 'shop' && (
-          <div className="flex-1 flex flex-col h-full bg-gray-950">
+          <div className="flex-1 min-h-0 flex flex-col h-full bg-gray-950 relative overflow-hidden">
             <div className="p-4 bg-gray-900 border-b border-gray-800 shrink-0 relative">
               <h2 onClick={handleSecretClick} className="text-yellow-400 font-black text-2xl flex items-center gap-2 cursor-pointer select-none"><ShoppingCart /> 獎勵商城</h2>
               <div className="absolute right-4 top-4 flex items-center gap-3">
@@ -1481,12 +1524,12 @@ export default function App() {
               <button onClick={() => setShopTab('history')} className={`flex-1 p-4 text-base font-bold flex justify-center gap-2 transition-colors ${shopTab === 'history' ? 'bg-gray-800 text-orange-400 border-b-2 border-orange-400' : 'text-gray-500'}`}><History size={20}/> 紀錄</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col relative">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col relative">
               {shopTab === 'gacha' && (
                 <div className="flex flex-col h-full gap-6 pb-4">
 
                   {/* 輪替卡池橫幅選擇 */}
-                  <div className="flex gap-2 overflow-x-auto pb-1">
+                  <div className="flex gap-2 overflow-x-auto pb-1 shrink-0">
                     {BANNER_THEMES.map((theme, idx) => (
                       <button
                         key={theme.id}
@@ -1555,71 +1598,6 @@ export default function App() {
                       <span>🎰 抽取自訂實體獎勵</span>
                       <span className="text-xs font-bold bg-black/20 px-4 py-0.5 rounded-full">消耗 500 G</span>
                     </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 天井核心商店 Modal */}
-              {showCoreShop && (
-                <div className="absolute inset-0 z-40 bg-black/95 backdrop-blur-md flex flex-col p-5 animate-in zoom-in-95 duration-200">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-black text-xl text-rose-400 flex items-center gap-2"><Hexagon /> 資料核心黑市 (天井兌換)</h3>
-                    <button onClick={() => setShowCoreShop(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full"><X size={20}/></button>
-                  </div>
-                  <div className="text-xs text-gray-400 mb-4 bg-gray-900 p-3 rounded-lg border border-gray-800">
-                    重複裝備轉化為資料核心。這裡可免除隨機性，直接指定兌換神裝湊齊套裝！
-                  </div>
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-3">
-                    {VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'SSR' || i.rarity === 'UR').map((item, i) => {
-                      const cost = item.rarity === 'UR' ? 15 : 8;
-                      const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                      return (
-                        <div key={i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center">
-                          <div className="flex flex-col">
-                            <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                            <span className="text-[10px] text-gray-400 mt-0.5">{item.buff}</span>
-                          </div>
-                          <button
-                            disabled={isOwned || (playerData.dataCores || 0) < cost}
-                            onClick={() => handleExchangeCore(item)}
-                            className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
-                          >
-                            {isOwned ? '已擁有' : `${cost} 核心兌換`}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* 卡池詳情 Modal */}
-              {showGachaDetails && (
-                <div className="absolute inset-0 z-40 bg-black/90 backdrop-blur-sm flex flex-col p-6 animate-in zoom-in-95 duration-200">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className={`font-black text-xl ${showGachaDetails === 'virtual' ? 'text-blue-400' : 'text-yellow-400'}`}>
-                      {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情' : '🎁 實體卡池詳情'}
-                    </h3>
-                    <button onClick={() => setShowGachaDetails(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full hover:text-white"><X size={20}/></button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-3 pb-6">
-                    {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(b.chance)-Number(a.chance)).map((p, i) => {
-                      const itemRarity = p.rarity || (Number(p.chance) <= 9 ? 'SSR' : (Number(p.chance) <= 35 ? 'R' : 'N'));
-                      const cfg = getRarityConfig(itemRarity);
-                      return (
-                        <div key={i} className="flex justify-between items-center bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow-sm">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{itemRarity}</span>
-                            <div className="flex flex-col truncate">
-                              <span className={`truncate text-base ${cfg.color}`}>{p.item}</span>
-                              {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
-                            </div>
-                          </div>
-                          <span className="text-gray-300 font-black text-lg shrink-0 ml-2">{p.chance}%</span>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               )}
@@ -1716,6 +1694,72 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* 天井核心商店 Modal */}
+            {showCoreShop && (
+              <div className="absolute inset-0 z-40 bg-black/95 backdrop-blur-md flex flex-col p-5 animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-4 shrink-0">
+                  <h3 className="font-black text-xl text-rose-400 flex items-center gap-2"><Hexagon /> 資料核心黑市 (天井兌換)</h3>
+                  <button onClick={() => setShowCoreShop(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full"><X size={20}/></button>
+                </div>
+                <div className="text-xs text-gray-400 mb-4 bg-gray-900 p-3 rounded-lg border border-gray-800 shrink-0">
+                  重複裝備轉化為資料核心。這裡可免除隨機性，直接指定兌換神裝湊齊套裝！
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3">
+                  {VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'SSR' || i.rarity === 'UR').map((item, i) => {
+                    const cost = item.rarity === 'UR' ? 15 : 8;
+                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
+                    return (
+                      <div key={i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center">
+                        <div className="flex flex-col">
+                          <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
+                          <span className="text-[10px] text-gray-400 mt-0.5">{item.buff}</span>
+                        </div>
+                        <button
+                          disabled={isOwned || (playerData.dataCores || 0) < cost}
+                          onClick={() => handleExchangeCore(item)}
+                          className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
+                        >
+                          {isOwned ? '已擁有' : `${cost} 核心兌換`}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 卡池詳情 Modal */}
+            {showGachaDetails && (
+              <div className="absolute inset-0 z-40 bg-black/90 backdrop-blur-sm flex flex-col p-6 animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-6 shrink-0">
+                  <h3 className={`font-black text-xl ${showGachaDetails === 'virtual' ? 'text-blue-400' : 'text-yellow-400'}`}>
+                    {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情' : '🎁 實體卡池詳情'}
+                  </h3>
+                  <button onClick={() => setShowGachaDetails(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full hover:text-white"><X size={20}/></button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-6">
+                  {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(b.chance)-Number(a.chance)).map((p, i) => {
+                    const itemRarity = p.rarity || (Number(p.chance) <= 9 ? 'SSR' : (Number(p.chance) <= 35 ? 'R' : 'N'));
+                    const cfg = getRarityConfig(itemRarity);
+                    return (
+                      <div key={i} className="flex justify-between items-center bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow-sm">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{itemRarity}</span>
+                          <div className="flex flex-col truncate">
+                            <span className={`truncate text-base ${cfg.color}`}>{p.item}</span>
+                            {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
+                          </div>
+                        </div>
+                        <span className="text-gray-300 font-black text-lg shrink-0 ml-2">{p.chance}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="p-4 border-t border-gray-900 shrink-0 bg-gray-950">
                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
             </div>
@@ -1724,8 +1768,8 @@ export default function App() {
 
         {/* --- 錯誤日誌 --- */}
         {screen === 'records' && (
-          <div className="flex-1 p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-6 gap-2">
+          <div className="flex-1 min-h-0 p-4 flex flex-col h-full">
+            <div className="flex items-center justify-between mb-6 gap-2 shrink-0">
               <h2 className="text-orange-400 font-black text-2xl flex items-center gap-2"><Database /> 錯誤日誌</h2>
               <button
                 onClick={() => startWaveRun('mistakes')}
@@ -1735,7 +1779,7 @@ export default function App() {
                 <Flame size={16} /> 錯題特訓 ({(playerData.mistakes || []).length})
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 gap-4 flex flex-col pb-4">
+            <div className="overflow-y-auto flex-1 min-h-0 gap-4 flex flex-col pb-4">
               {(playerData.mistakes || []).length === 0 ? <div className="text-gray-500 text-center mt-10 font-bold">完美通關，尚無錯誤紀錄</div> : null}
               {(playerData.mistakes || []).map((m, i) => (
                 <div key={m.id || i} className="bg-gray-900 p-5 rounded-2xl border border-orange-900/40 shadow-sm flex flex-col gap-3">
@@ -1745,7 +1789,7 @@ export default function App() {
                       {tts.isSupported() && m.a && (
                         <button
                           type="button"
-                          onClick={() => tts.speak(m.a.split('（')[0].split(' / ')[0])}
+                          onClick={() => tts.speakAnswer(m.a)}
                           title="朗讀正解"
                           className="p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform"
                         >
