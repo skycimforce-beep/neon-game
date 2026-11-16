@@ -7,7 +7,7 @@ export const VIRTUAL_GACHA_POOL = [
   // 量子電磁系列 (Cyber Set)
   { id: 'vfx_cyber', set: 'cyber', item: '【特效】⚡ 量子電磁脈衝', chance: 3.5, rarity: 'SSR', type: 'vfx', buff: 'Combo 達到 3 以上金幣微幅增加', vfxClass: 'bg-cyan-400 drop-shadow-[0_0_25px_cyan]', extra: '⚡' },
   { id: 'skin_cyber', set: 'cyber', item: '【外觀】🤖 賽博智械核', chance: 3.5, rarity: 'SSR', type: 'skin', buff: '首題答對金幣 +50G', emoji: '🤖', bossEmoji: '🛸' },
-  { id: 'chip_cyber', set: 'cyber', item: '【晶片】💠 超頻演算矩陣', chance: 3.5, rarity: 'SSR', type: 'chip', buff: '閱讀測驗倒數延長 10 秒', icon: '💠' },
+  { id: 'chip_cyber', set: 'cyber', item: '【晶片】💠 超頻演算矩陣', chance: 3.5, rarity: 'SSR', type: 'chip', buff: '閱讀測驗倒數延長 20 秒', icon: '💠' },
 
   // UR 神話裝備
   { id: 'chip_ur1', set: 'mythic', item: '【神話晶片】🛡️ 量子死線防禦', chance: 0.5, rarity: 'UR', type: 'chip', buff: '單場作戰免死 1 次 (保留 1 HP)', icon: '🛡️' },

@@ -27,6 +27,12 @@ try {
 } catch (e) {}
 const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+const getLocalDateString = (d = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const VOCAB_IDS = new Set(VOCAB_DATA.map(q => q.id));
 const SORT_IDS = new Set(GRAMMAR_SORT_DATA.map(q => q.id));
@@ -58,7 +64,7 @@ export default function App() {
   const [playerData, setPlayerData] = useState({
     hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
     critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
-    gachaPool: DEFAULT_GACHA_POOL, isGachaLocked: false, gachaHistory: [],
+    gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
     inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
     pityCount: 0,
     dataCores: 0
@@ -66,11 +72,23 @@ export default function App() {
   const playerDataRef = useRef(playerData);
   useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
 
-  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, mode: 'mixed' });
+  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: 'mixed' });
   const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
   const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
   const [isPaused, setIsPaused] = useState(false);
+  const [isAnswering, setIsAnswering] = useState(false);
   const isAnsweringRef = useRef(false);
+  const answerTimerRef = useRef(null);
+
+  const clearAnswerTimer = () => {
+    if (answerTimerRef.current) {
+      clearTimeout(answerTimerRef.current);
+      answerTimerRef.current = null;
+    }
+    isAnsweringRef.current = false;
+    setIsAnswering(false);
+  };
+  useEffect(() => () => clearAnswerTimer(), []);
 
   const [shopTab, setShopTab] = useState('gacha');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
@@ -123,6 +141,14 @@ export default function App() {
   };
   const activeSetBonus = getActiveSet();
 
+  const getReadingTimeLimit = () => {
+    let limit = 120;
+    if (equippedChip?.id === 'chip_cyber') limit += 20;
+    if (equippedVFX?.id === 'vfx_sakura') limit += 1;
+    if (activeSetBonus && activeSetBonus.name.includes('量子駭客')) limit += 2;
+    return limit;
+  };
+
   const getUnmastered = (pool, count) => {
     let unmastered = pool.filter(q => (masteryObj[q.id] || 0) < 3);
     unmastered = shuffle(unmastered);
@@ -135,8 +161,8 @@ export default function App() {
 
   const loadEncounter = (encounter) => {
     if (!encounter) return;
-    isAnsweringRef.current = false;
-    const baseTime = 120 + (equippedChip?.id === 'chip_cyber' ? 20 : 0);
+    clearAnswerTimer();
+    const baseTime = getReadingTimeLimit();
     let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
     if (encounter.type === 'mcq') {
       uiState.data = encounter.data;
@@ -251,10 +277,10 @@ export default function App() {
 
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
-    isAnsweringRef.current = false;
+    clearAnswerTimer();
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
     setCombo(0);
-    setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, mode: targetMode });
+    setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: targetMode });
     setIsPaused(false);
     loadEncounter(fullQueue[0]);
     setScreen('battle');
@@ -337,10 +363,10 @@ export default function App() {
 
   useEffect(() => {
     if (relaxedMode) return;
-    if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
+    if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused && !isAnswering) {
       const timer = setTimeout(() => setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 })), 1000);
       return () => clearTimeout(timer);
-    } else if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft === 0 && !feedback.show && !isPaused) {
+    } else if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft === 0 && !feedback.show && !isPaused && !isAnswering) {
       let dmg = Math.floor((playerData.maxHp || 100) * 0.3);
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
@@ -368,19 +394,19 @@ export default function App() {
             example: '【文章翻譯】',
             exampleZh: combatUI.data.translation
           };
-          const currentMistakes = pData.mistakes || [];
-          if (!currentMistakes.find(m => m.q === mistakeEntry.q)) {
-            pData.mistakes = [mistakeEntry, ...currentMistakes].slice(0, 100);
-          }
+          const filteredMistakes = (pData.mistakes || []).filter(
+            m => !((mistakeEntry.id && m.id === mistakeEntry.id) || m.q === mistakeEntry.q)
+          );
+          pData.mistakes = [mistakeEntry, ...filteredMistakes].slice(0, 100);
         }
       }
       saveGame(pData);
 
-      const resetTime = 120 + (equippedChip?.id === 'chip_cyber' ? 20 : 0);
+      const resetTime = getReadingTimeLimit();
       setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！可切換「休閒學習模式」關閉時間限制。', correct: '時間耗盡', example: '請加快閱讀理解或利用暫停鍵思考文章內容。', exampleZh: '' });
       setCombatUI(prev => ({ ...prev, timeLeft: resetTime }));
     }
-  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, relaxedMode]);
+  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, isAnswering, relaxedMode]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
   useEffect(() => {
@@ -433,7 +459,8 @@ export default function App() {
     if (nextIndex >= effectiveQueue.length) {
       const baseGold = waveState.mode === 'mixed' ? 500 : (waveState.mode === 'reading' ? 300 : 250);
       let earnedGold = baseGold;
-      if (equippedSkin?.buff?.includes('金幣')) earnedGold += 100;
+      if (equippedSkin?.id === 'skin_sakura') earnedGold = Math.floor(earnedGold * 1.2);
+      else if (equippedSkin?.id === 'skin_r1') earnedGold = Math.floor(earnedGold * 1.1);
       if (activeSetBonus && activeSetBonus.name.includes('櫻華')) earnedGold = Math.floor(earnedGold * 1.4);
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
 
@@ -444,7 +471,7 @@ export default function App() {
       setScreen('menu');
     } else {
       const nextEncounter = effectiveQueue[nextIndex];
-      if (activeSetBonus && activeSetBonus.name.includes('量子駭客')) {
+      if (activeSetBonus && activeSetBonus.name.includes('量子駭客') && nextEncounter.wave > waveState.currentWave) {
         const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + 10);
         if (healedHp !== newHp) {
           saveGame({ ...playerDataRef.current, hp: healedHp });
@@ -458,6 +485,7 @@ export default function App() {
   const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
     if (isPaused || isAnsweringRef.current) return;
     isAnsweringRef.current = true;
+    setIsAnswering(true);
     let pData = { ...playerDataRef.current, mastery: { ...(playerDataRef.current.mastery || {}) } };
     
     if (isCorrect) {
@@ -474,6 +502,17 @@ export default function App() {
         heal += 5;
       }
       pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
+
+      // Apply equipment combat gold buffs
+      if (combatUI.type !== 'potion') {
+        if (waveState.currentIndex === 0 && !waveState.firstBonusUsed && equippedSkin?.id === 'skin_cyber') {
+          pData.gold = (pData.gold || 0) + 50;
+          setWaveState(prev => ({ ...prev, firstBonusUsed: true }));
+        }
+        if (newCombo >= 3 && equippedVFX?.id === 'vfx_cyber') {
+          pData.gold = (pData.gold || 0) + 15;
+        }
+      }
 
       if (combatUI.type !== 'potion' && combatUI.data) {
         pData.mastery[combatUI.data.id] = (pData.mastery[combatUI.data.id] || 0) + 1;
@@ -501,12 +540,17 @@ export default function App() {
       }
       saveGame(pData);
       if (mistakeInfo) {
-        setTimeout(() => {
+        answerTimerRef.current = setTimeout(() => {
+          answerTimerRef.current = null;
           isAnsweringRef.current = false;
+          setIsAnswering(false);
           setFeedback({ show: true, isWrong: false, damageTaken: 0, text: mistakeInfo.exp || '', correct: mistakeInfo.a || '', example: mistakeInfo.example || '', exampleZh: mistakeInfo.exampleZh || '' });
         }, 800);
       } else {
-        setTimeout(() => handleNext(pData.hp), 800);
+        answerTimerRef.current = setTimeout(() => {
+          answerTimerRef.current = null;
+          handleNext(pData.hp);
+        }, 800);
       }
     } else {
       sfx.playError();
@@ -531,12 +575,14 @@ export default function App() {
       if (combatUI.type !== 'potion' && combatUI.data) pData.mastery[combatUI.data.id] = 0;
       if (mistakeInfo && combatUI.type !== 'potion') {
         const entry = { id: combatUI.data?.id, type: combatUI.type, ...mistakeInfo };
-        const currentMistakes = pData.mistakes || [];
-        const exists = currentMistakes.find(m => (entry.id && m.id === entry.id) || m.q === entry.q);
-        if (!exists) pData.mistakes = [entry, ...currentMistakes].slice(0, 100);
+        const filteredMistakes = (pData.mistakes || []).filter(
+          m => !((entry.id && m.id === entry.id) || m.q === entry.q)
+        );
+        pData.mistakes = [entry, ...filteredMistakes].slice(0, 100);
       }
       saveGame(pData);
       isAnsweringRef.current = false;
+      setIsAnswering(false);
       setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', exampleZh: mistakeInfo?.exampleZh || '' });
     }
   };
@@ -582,7 +628,20 @@ export default function App() {
     if (newSlots.filter(s => s !== null).length === 4) {
       const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
       const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+      const fullSentence = combatUI.data.context.includes('／')
+        ? combatUI.data.context.replace('／', correctSentence)
+        : `${combatUI.data.context}${correctSentence}`;
+      const grammarNote = combatUI.data.example || '';
+      const fullExp = grammarNote
+        ? `${grammarNote}\n\n【中譯】${combatUI.data.translation}`
+        : combatUI.data.translation;
+      processAnswer(newSlots.join('') === correctSentence, 2, 0, {
+        q: combatUI.data.context,
+        a: correctSentenceDisplay,
+        exp: fullExp,
+        example: fullSentence,
+        exampleZh: combatUI.data.translation
+      });
     }
   };
   const handleTypeSubmit = (e) => {
@@ -593,7 +652,20 @@ export default function App() {
     const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
     processAnswer(accepted.includes(userInput), 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
-  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handlePotionClick = (idx) => {
+    if (!combatUI.data) return;
+    const correctOpt = combatUI.data.options[combatUI.data.correct];
+    const fullSentence = combatUI.data.context.includes('___')
+      ? combatUI.data.context.replace('___', correctOpt)
+      : combatUI.data.context;
+    processAnswer(idx === combatUI.data.correct, 0, 20, {
+      q: combatUI.data.context,
+      a: correctOpt,
+      exp: combatUI.data.example || combatUI.data.translation,
+      example: fullSentence,
+      exampleZh: combatUI.data.translation
+    });
+  };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
     processAnswer(idx === combatUI.data.correct, idx === combatUI.data.correct ? 1.5 : 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
@@ -632,10 +704,15 @@ export default function App() {
   };
 
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
-  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(waveState.mode); };
+  const handleRestartBattle = () => {
+    clearAnswerTimer();
+    setIsPaused(false);
+    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
+    startWaveRun(waveState.mode);
+  };
   const handleSurrender = () => {
+    clearAnswerTimer();
     setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    isAnsweringRef.current = false;
     tts.stop();
     saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
     showToast("已安全撤退至主終端。", "info"); setScreen('menu');
@@ -643,13 +720,17 @@ export default function App() {
 
   const handleDailyCheckIn = () => {
     sfx.init();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     if (playerData.lastLoginDate === today) return;
     let newCritRate = playerData.critRate || 0.1, message = "";
     if (!playerData.lastLoginDate) { newCritRate = 0.2; message = "系統首次連線！爆擊率 +0.1%"; }
     else {
-      const diffDays = Math.ceil(Math.abs(new Date(today) - new Date(playerData.lastLoginDate)) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; } else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
+      const [tY, tM, tD] = today.split('-').map(Number);
+      const [lY, lM, lD] = playerData.lastLoginDate.split('-').map(Number);
+      const diffDays = Math.round((new Date(tY, tM - 1, tD) - new Date(lY, lM - 1, lD)) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; }
+      else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
+      else return;
     }
     sfx.playRareChime(false);
     saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)), gold: (playerData.gold || 0) + 200 });
@@ -659,45 +740,48 @@ export default function App() {
   // ==========================================
   // 抽獎核心運算 (含 UP 權重、保底、變色偽裝)
   // ==========================================
+  const pickWeightedItem = (items) => {
+    const totalWeight = items.reduce((sum, it) => sum + Math.max(0, Number(it.chance) || 0), 0);
+    if (totalWeight <= 0) return items[items.length - 1];
+    let rand = Math.random() * totalWeight;
+    for (const item of items) {
+      const w = Math.max(0, Number(item.chance) || 0);
+      if (rand < w) return item;
+      rand -= w;
+    }
+    return items[items.length - 1];
+  };
+
   const rollSingleItem = (poolType, currentPity, bannerTheme) => {
     if (poolType === 'real') {
-      const pool = playerData.gachaPool || DEFAULT_GACHA_POOL;
-      let randomNum = Math.random() * 100, wonItem = null;
-      for (let item of pool) {
-        if (randomNum < Number(item.chance)) { wonItem = item; break; }
-        randomNum -= Number(item.chance);
-      }
-      return { item: wonItem || pool[0], rarity: Number(wonItem?.chance || 10) <= 9 ? 'SSR' : 'N', isDuplicate: false };
+      const pool = playerDataRef.current.gachaPool || DEFAULT_GACHA_POOL;
+      const wonItem = pickWeightedItem(pool) || pool[0];
+      const chanceNum = Number(wonItem?.chance ?? 10);
+      const rarity = wonItem?.rarity || (chanceNum <= 9 ? 'SSR' : (chanceNum <= 35 ? 'R' : 'N'));
+      return { item: wonItem, rarity, isDuplicate: false };
     }
 
     const isHardPity = currentPity >= 29;
-    let ssrBoost = currentPity >= 20 ? (currentPity - 19) * 5 : 0;
-    let roll = Math.random() * 100;
+    const ssrBoost = currentPity >= 20 ? (currentPity - 19) * 5 : 0;
+    const highRarityPool = VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'UR' || i.rarity === 'SSR');
+    const lowRarityPool = VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'R' || i.rarity === 'N');
+    const baseHighRate = highRarityPool.reduce((sum, i) => sum + Number(i.chance || 0), 0); // 22% (21% SSR + 1% UR)
+    const roll = Math.random() * 100;
 
     let wonItem = null;
-    let pool = [...VIRTUAL_GACHA_POOL];
-
-    if (isHardPity || roll < (8 + ssrBoost)) {
-      const highRarityPool = pool.filter(i => i.rarity === 'UR' || i.rarity === 'SSR');
-
+    if (isHardPity || roll < (baseHighRate + ssrBoost)) {
       if (bannerTheme?.featuredSet) {
         const featuredItems = highRarityPool.filter(i => i.set === bannerTheme.featuredSet);
         if (featuredItems.length > 0 && Math.random() < 0.6) {
-          wonItem = featuredItems[Math.floor(Math.random() * featuredItems.length)];
+          wonItem = pickWeightedItem(featuredItems);
         }
       }
-      if (!wonItem) wonItem = highRarityPool[Math.floor(Math.random() * highRarityPool.length)];
+      if (!wonItem) wonItem = pickWeightedItem(highRarityPool);
     } else {
-      let accum = 0;
-      let rand = Math.random() * 100;
-      for (let item of pool) {
-        accum += Number(item.chance);
-        if (rand <= accum) { wonItem = item; break; }
-      }
-      if (!wonItem) wonItem = pool[0];
+      wonItem = pickWeightedItem(lowRarityPool);
     }
 
-    const isDup = (playerData.inventory || []).some(inv => inv?.id === wonItem.id);
+    const isDup = (playerDataRef.current.inventory || []).some(inv => inv?.id === wonItem.id);
     return { item: wonItem, rarity: wonItem.rarity, isDuplicate: isDup };
   };
 
@@ -987,9 +1071,9 @@ export default function App() {
                 <div className="bg-gray-800/50 p-2 rounded text-red-300 border border-gray-700/50">攻 {playerData.atk || 10}</div>
                 <div className="bg-gray-800/50 p-2 rounded text-blue-300 border border-gray-700/50">防 {playerData.def || 5}</div>
               </div>
-              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === new Date().toISOString().split('T')[0]} className={`w-full p-4 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
+              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-4 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
                 <CalendarCheck size={18} />
-                {playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
+                {playerData.lastLoginDate === getLocalDateString() ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
               </button>
             </div>
 
@@ -1182,7 +1266,7 @@ export default function App() {
                  <span className="font-bold text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
                  <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
-               <button onClick={() => setIsPaused(true)} disabled={feedback.show} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               <button onClick={() => setIsPaused(true)} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
              </div>
 
              <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
@@ -1209,7 +1293,7 @@ export default function App() {
                      </div>
                    ) : (
                      <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
-                       <Clock size={20} className={isPaused || feedback.show ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                       <Clock size={20} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
                      </div>
                    )
                  )}
@@ -1521,11 +1605,12 @@ export default function App() {
 
                   <div className="flex-1 overflow-y-auto flex flex-col gap-3 pb-6">
                     {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(b.chance)-Number(a.chance)).map((p, i) => {
-                      const cfg = getRarityConfig(p.rarity);
+                      const itemRarity = p.rarity || (Number(p.chance) <= 9 ? 'SSR' : (Number(p.chance) <= 35 ? 'R' : 'N'));
+                      const cfg = getRarityConfig(itemRarity);
                       return (
                         <div key={i} className="flex justify-between items-center bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow-sm">
                           <div className="flex items-center gap-3 overflow-hidden">
-                            <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{p.rarity}</span>
+                            <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{itemRarity}</span>
                             <div className="flex flex-col truncate">
                               <span className={`truncate text-base ${cfg.color}`}>{p.item}</span>
                               {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
@@ -1554,7 +1639,7 @@ export default function App() {
                           <div key={i} className="bg-gray-800 p-4 rounded-xl flex justify-between items-center border border-gray-700"><span className="font-bold text-gray-200 truncate text-lg">{p.item}</span><span className="text-cyan-400 font-bold bg-cyan-950 px-3 py-1 rounded-lg text-lg">{p.chance}%</span></div>
                         ))}
                       </div>
-                      <button onClick={() => { setEditPool([...(playerData.gachaPool || DEFAULT_GACHA_POOL)]); setIsEditingShop(true); }} className="mt-4 bg-cyan-900/50 border-2 border-cyan-500 text-cyan-200 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">
+                      <button onClick={() => { setEditPool((playerData.gachaPool || DEFAULT_GACHA_POOL).map(item => ({ ...item }))); setIsEditingShop(true); }} className="mt-4 bg-cyan-900/50 border-2 border-cyan-500 text-cyan-200 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">
                         {playerData.isGachaLocked ? '🔓 編輯模式 (儲存收 1000G)' : '📝 編輯獎勵 (初次免費)'}
                       </button>
                     </div>
@@ -1562,33 +1647,42 @@ export default function App() {
                     <div className="flex flex-col gap-4">
                       <div className="flex flex-col gap-3">
                         {editPool.map((p, i) => (
-                          <div key={p.id} className="bg-gray-800 p-4 rounded-2xl border border-gray-600 flex flex-col gap-3">
-                            <input type="text" value={p.item} onChange={e => { const np = [...editPool]; np[i].item = e.target.value; setEditPool(np); }} placeholder="獎勵名稱" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white focus:outline-none focus:border-cyan-500 font-bold" />
+                          <div key={p.id || i} className="bg-gray-800 p-4 rounded-2xl border border-gray-600 flex flex-col gap-3">
+                            <input type="text" value={p.item} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, item: val } : it)); }} placeholder="獎勵名稱" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white focus:outline-none focus:border-cyan-500 font-bold" />
                             <div className="flex gap-2">
                               <div className="flex-1 relative">
-                                <input type="number" min="1" max="100" value={p.chance} onChange={e => { const np = [...editPool]; np[i].chance = e.target.value; setEditPool(np); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
+                                <input type="number" min="1" max="100" value={p.chance} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, chance: val } : it)); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
                                 <span className="absolute right-4 top-4 text-gray-500 font-bold">%</span>
                               </div>
-                              <button onClick={() => { const np = [...editPool]; np.splice(i, 1); setEditPool(np); }} className="bg-red-900/50 text-red-400 p-4 rounded-xl border-2 border-red-800 active:scale-95 w-16 flex items-center justify-center"><Trash2 size={24}/></button>
+                              <button onClick={() => setEditPool(prev => prev.filter((_, idx) => idx !== i))} className="bg-red-900/50 text-red-400 p-4 rounded-xl border-2 border-red-800 active:scale-95 w-16 flex items-center justify-center"><Trash2 size={24}/></button>
                             </div>
                           </div>
                         ))}
                       </div>
-                      <button onClick={() => setEditPool([...editPool, { id: `g${Date.now()}`, item: '', chance: 0 }])} className="border-2 border-dashed border-gray-600 text-gray-400 p-5 rounded-2xl font-bold active:bg-gray-800"><Plus size={20} className="inline mr-2" /> 新增欄位</button>
+                      <button onClick={() => setEditPool(prev => [...prev, { id: `g${Date.now()}_${prev.length}`, item: '', chance: 0 }])} className="border-2 border-dashed border-gray-600 text-gray-400 p-5 rounded-2xl font-bold active:bg-gray-800"><Plus size={20} className="inline mr-2" /> 新增欄位</button>
                       <div className="flex gap-3 mt-4">
                         <button onClick={() => setIsEditingShop(false)} className="flex-1 bg-gray-800 text-gray-300 p-5 rounded-2xl font-black text-lg active:scale-95">取消</button>
                         <button onClick={() => {
                           if (editPool.length === 0) return showToast("必須至少有一個獎勵選項！", "error");
-                          if (editPool.find(p => p.item.trim() === '')) return showToast("獎勵名稱不能為空！", "error");
-                          const totalChance = editPool.reduce((sum, item) => sum + Number(item.chance || 0), 0);
-                          if (totalChance !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
+                          if (editPool.some(p => !String(p.item || '').trim())) return showToast("獎勵名稱不能為空！", "error");
+                          if (editPool.some(p => !Number.isFinite(Number(p.chance)) || Number(p.chance) <= 0 || Number(p.chance) > 100)) {
+                            return showToast("每個項目的機率必須介於 1% 到 100% 之間！", "error");
+                          }
+                          const normalizedPool = editPool.map((p, idx) => ({
+                            ...p,
+                            id: p.id || `g_${idx}`,
+                            item: String(p.item).trim(),
+                            chance: Number(p.chance)
+                          }));
+                          const totalChance = normalizedPool.reduce((sum, item) => sum + item.chance, 0);
+                          if (Math.round(totalChance * 1000) / 1000 !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
 
                           if (playerData.isGachaLocked) {
                             if ((playerData.gold || 0) < 1000) { setBtnShake(true); setTimeout(() => setBtnShake(false), 500); return showToast("金幣不足！修改需要 1000 G。", "error"); }
-                            saveGame({ ...playerData, gachaPool: editPool, gold: playerData.gold - 1000 });
+                            saveGame({ ...playerData, gachaPool: normalizedPool, gold: playerData.gold - 1000 });
                             setIsEditingShop(false); showToast("修改成功！已扣除 1000 G。", "success");
                           } else {
-                            saveGame({ ...playerData, gachaPool: editPool, isGachaLocked: true });
+                            saveGame({ ...playerData, gachaPool: normalizedPool, isGachaLocked: true });
                             setIsEditingShop(false); showToast("設定已儲存並鎖定！", "success");
                           }
                         }} className={`flex-1 text-white p-5 rounded-2xl font-black text-lg active:scale-95 ${btnShake ? 'animate-[shake-error_0.4s_ease-in-out] bg-red-500' : 'bg-green-600 shadow-[0_0_15px_rgba(22,163,74,0.5)]'}`}>

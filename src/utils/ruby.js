@@ -4,6 +4,16 @@ export const KATAKANA_RE = '[\\u30a0-\\u30ffー]';
 export const KANA_RE = '[\\u3040-\\u309f\\u30a0-\\u30ffー]';
 
 /**
+ * Convert katakana characters in a string to hiragana for reading comparisons.
+ */
+export const toHiragana = (str) => {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/[\u30a1-\u30f6]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0x60)
+  );
+};
+
+/**
  * Normalize full-width furigana parentheses `（...）` into `[...]`
  * without touching Chinese explanations or grammar aliases like `～てしまう（ちゃう）`.
  */

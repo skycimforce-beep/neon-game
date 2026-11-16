@@ -2,28 +2,43 @@ import {
   KANJI_OR_DIGIT_RE,
   HIRAGANA_RE,
   KATAKANA_RE,
+  toHiragana,
   normalizeRubyBrackets,
 } from '../utils/ruby';
 
 const extractRubyBase = (before, rt) => {
-  // 1. Kanji / digit compound at end of `before`
-  const kanjiMatch = before.match(
-    new RegExp(`(${KANJI_OR_DIGIT_RE}+(?:[\\u3040-\\u309f]+${KANJI_OR_DIGIT_RE}+)*[\\u3040-\\u309f]*)$`)
+  const rtHira = toHiragana(rt);
+
+  // 1. Kanji / digit word at end of `before` (with optional okurigana if rtHira ends with it)
+  const simpleKanjiMatch = before.match(
+    new RegExp(`(${KANJI_OR_DIGIT_RE}+)([\\u3040-\\u309f]*)$`)
   );
-  if (kanjiMatch) {
-    let base = kanjiMatch[1];
-    const trailingMatch = base.match(/([\u3040-\u309f]+)$/);
-    if (trailingMatch) {
-      const trailing = trailingMatch[1];
-      if (!(rt.length > trailing.length && rt.endsWith(trailing))) {
-        base = base.slice(0, base.length - trailing.length);
+  if (simpleKanjiMatch) {
+    const trailingHira = simpleKanjiMatch[2];
+    if (!trailingHira || (rtHira.length > trailingHira.length && rtHira.endsWith(trailingHira))) {
+      let base = simpleKanjiMatch[0];
+      // Check if preceding kanji+hiragana is part of a compound word (e.g. 切符売り場, 我が家, 思い出す)
+      const prefix = before.slice(0, before.length - base.length);
+      const compoundMatch = prefix.match(
+        new RegExp(`(${KANJI_OR_DIGIT_RE}+)([\\u3040-\\u309f]+)$`)
+      );
+      if (compoundMatch) {
+        const [, k1, midHira] = compoundMatch;
+        const minLen = k1.length + midHira.length + simpleKanjiMatch[1].length + trailingHira.length;
+        const idx = rtHira.indexOf(midHira, 1);
+        if (idx !== -1 && idx + midHira.length < rtHira.length && rtHira.length >= minLen) {
+          base = compoundMatch[0] + base;
+        }
       }
+      const remPrefix = before.slice(0, before.length - base.length);
+      if (
+        (remPrefix.endsWith('お') && rtHira.startsWith('お')) ||
+        (remPrefix.endsWith('ご') && rtHira.startsWith('ご'))
+      ) {
+        base = remPrefix.slice(-1) + base;
+      }
+      return { plain: before.slice(0, before.length - base.length), base };
     }
-    const prefix = before.slice(0, before.length - base.length);
-    if ((prefix.endsWith('お') && rt.startsWith('お')) || (prefix.endsWith('ご') && rt.startsWith('ご'))) {
-      base = prefix.slice(-1) + base;
-    }
-    return { plain: before.slice(0, before.length - base.length), base };
   }
 
   // 2. Katakana word with reading (e.g. ホーム[ほーむ])

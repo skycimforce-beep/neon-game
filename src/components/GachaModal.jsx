@@ -1,4 +1,3 @@
-import React from 'react';
 import { Hexagon, Flame } from 'lucide-react';
 
 export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, closeGacha }) => {
@@ -44,6 +43,7 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
             {gachaState.results.map((res, i) => {
               const cfg = getRarityConfig(res.rarity);
               const itemName = res.item.item || res.item;
+              const dupCores = res.rarity === 'UR' ? 5 : (res.rarity === 'SSR' ? 3 : 1);
               return (
                 <div
                   key={i}
@@ -57,7 +57,7 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
                     {itemName}
                   </div>
                   {res.item.buff && <div className="text-[10px] text-yellow-300 bg-yellow-950/40 px-2 py-0.5 rounded border border-yellow-800/40 mb-1">🔥 {res.item.buff}</div>}
-                  {res.isDuplicate && <div className="text-[10px] text-cyan-400 font-bold">+1 資料核心 / +100G</div>}
+                  {res.isDuplicate && <div className="text-[10px] text-cyan-400 font-bold">+{dupCores} 資料核心 / +100G</div>}
                 </div>
               );
             })}
