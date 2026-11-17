@@ -3,7 +3,7 @@ import { sfx } from './utils/soundFX';
 import { tts } from './utils/tts';
 import { toHiragana } from './utils/ruby';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
-import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
+import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL, COLLECTION_MILESTONES } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
 import { GachaModal } from './components/GachaModal';
 import { LoginScreen } from './components/LoginScreen';
@@ -68,7 +68,8 @@ export default function App() {
     gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
     inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
     pityCount: 0,
-    dataCores: 0
+    dataCores: 0,
+    claimedMilestones: []
   });
   const playerDataRef = useRef(playerData);
   useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
@@ -135,8 +136,8 @@ export default function App() {
 
   const getActiveSet = () => {
     if (!equippedVFX || !equippedSkin || !equippedChip) return null;
-    if (equippedVFX.set && equippedVFX.set === equippedSkin.set && equippedSkin.set === equippedChip.set) {
-      return SET_BONUSES[equippedVFX.set] || null;
+    if (equippedVFX.set && equippedVFX.set === equippedSkin.set && equippedSkin.set === equippedChip.set && SET_BONUSES[equippedVFX.set]) {
+      return { key: equippedVFX.set, ...SET_BONUSES[equippedVFX.set] };
     }
     return null;
   };
@@ -145,8 +146,10 @@ export default function App() {
   const getReadingTimeLimit = () => {
     let limit = 120;
     if (equippedChip?.id === 'chip_cyber') limit += 20;
+    if (equippedChip?.id === 'chip_n_forget') limit += 3;
     if (equippedVFX?.id === 'vfx_sakura') limit += 1;
-    if (activeSetBonus && activeSetBonus.name.includes('量子駭客')) limit += 2;
+    if (activeSetBonus?.key === 'cyber') limit += 2;
+    if (activeSetBonus?.key === 'mythic') limit += 10;
     return limit;
   };
 
@@ -321,7 +324,8 @@ export default function App() {
           ...localData,
           critRate: localData.critRate || 0.1,
           lastLoginDate: localData.lastLoginDate || '',
-          mastery: localData.mastery || {}
+          mastery: localData.mastery || {},
+          claimedMilestones: localData.claimedMilestones || []
         };
         playerDataRef.current = mergedLocal;
         setPlayerData(mergedLocal);
@@ -352,12 +356,17 @@ export default function App() {
           Object.keys(mergedMastery).forEach((k) => {
             mergedMastery[k] = Math.max(data.mastery?.[k] || 0, currentLocal.mastery?.[k] || 0);
           });
+          const mergedClaimed = Array.from(new Set([
+            ...(data.claimedMilestones || []),
+            ...(currentLocal.claimedMilestones || [])
+          ]));
           const base = isLocalNewer ? { ...data, ...currentLocal } : { ...currentLocal, ...data };
           const merged = {
             ...base,
             critRate: base.critRate || 0.1,
             lastLoginDate: base.lastLoginDate || '',
-            mastery: mergedMastery
+            mastery: mergedMastery,
+            claimedMilestones: mergedClaimed
           };
           playerDataRef.current = merged;
           setPlayerData(merged);
@@ -497,7 +506,12 @@ export default function App() {
       let earnedGold = baseGold;
       if (equippedSkin?.id === 'skin_sakura') earnedGold = Math.floor(earnedGold * 1.2);
       else if (equippedSkin?.id === 'skin_r1') earnedGold = Math.floor(earnedGold * 1.1);
-      if (activeSetBonus && activeSetBonus.name.includes('櫻華')) earnedGold = Math.floor(earnedGold * 1.4);
+      if (equippedSkin?.id === 'skin_r_conbini') earnedGold += 60;
+      if (equippedSkin?.id === 'skin_ur1') earnedGold += 100;
+      if (activeSetBonus?.key === 'sakura') earnedGold = Math.floor(earnedGold * 1.4);
+      if (activeSetBonus?.key === 'mythic') earnedGold = Math.floor(earnedGold * 1.5);
+      if (activeSetBonus?.key === 'shachiku') earnedGold += 120;
+      if (activeSetBonus?.key === 'chuuni') earnedGold += 100;
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
 
       showToast(`🎉 區域肅清！獲得 ${earnedGold} G 學習津貼！`, "success");
@@ -507,10 +521,15 @@ export default function App() {
       setScreen('menu');
     } else {
       const nextEncounter = effectiveQueue[nextIndex];
-      if (activeSetBonus && activeSetBonus.name.includes('量子駭客') && nextEncounter.wave > waveState.currentWave) {
-        const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + 10);
-        if (healedHp !== newHp) {
-          saveGame({ ...playerDataRef.current, hp: healedHp });
+      if (nextEncounter.wave > waveState.currentWave) {
+        let waveHeal = 0;
+        if (activeSetBonus?.key === 'cyber') waveHeal += 10;
+        if (equippedChip?.id === 'chip_nomihodai') waveHeal += 8;
+        if (waveHeal > 0) {
+          const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + waveHeal);
+          if (healedHp !== newHp) {
+            saveGame({ ...playerDataRef.current, hp: healedHp });
+          }
         }
       }
       setWaveState(prev => ({ ...prev, queue: effectiveQueue, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
@@ -530,12 +549,31 @@ export default function App() {
       if (combatUI.type !== 'potion') setCombo(newCombo);
 
       const comboBonus = 1 + Math.min(newCombo * 0.05, 0.4);
-      let isCrit = Math.random() * 100 < (pData.critRate || 0.1);
-      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
-      if (isCrit) dmg = Math.floor(dmg * 2.0);
+      let effectiveCrit = pData.critRate || 0.1;
+      if (equippedVFX?.id === 'vfx_r1') effectiveCrit += 5;
+      if (equippedChip?.id === 'chip_deadline' && (pData.hp || 100) < (pData.maxHp || 100) * 0.5) effectiveCrit += 35;
+      if (activeSetBonus?.key === 'chuuni') effectiveCrit += 25;
+      let isCrit = Math.random() * 100 < effectiveCrit;
 
+      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
+      if (equippedChip?.id === 'chip_ramen') dmg = Math.floor(dmg * 1.4);
+      else if (equippedChip?.id === 'chip_r_anime') dmg = Math.floor(dmg * 1.15);
+      if (equippedVFX?.id === 'vfx_coffee' && newCombo >= 2) dmg = Math.floor(dmg * 1.25);
+      if (equippedVFX?.id === 'vfx_chuuni' && (combatUI.type === 'type' || combatUI.type === 'sort')) dmg = Math.floor(dmg * 1.3);
+      if (equippedVFX?.id === 'vfx_n_mos') dmg += 2;
+      if (isCrit) dmg = Math.floor(dmg * (equippedSkin?.id === 'skin_neko' ? 2.6 : 2.0));
+
+      if (combatUI.type === 'potion' && equippedVFX?.id === 'vfx_highball') {
+        heal = Math.floor(heal * 1.5);
+      }
       if (equippedChip?.id === 'chip_sakura') {
         heal += 5;
+      }
+      if (equippedChip?.id === 'chip_ramen' && combatUI.type !== 'potion' && newCombo > 0 && newCombo % 3 === 0) {
+        heal += 10;
+      }
+      if (combatUI.type !== 'potion' && activeSetBonus?.key === 'mythic') {
+        heal += 3;
       }
       pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
 
@@ -547,6 +585,24 @@ export default function App() {
         }
         if (newCombo >= 3 && equippedVFX?.id === 'vfx_cyber') {
           pData.gold = (pData.gold || 0) + 15;
+        }
+        if (equippedSkin?.id === 'skin_train') {
+          pData.gold = (pData.gold || 0) + 12;
+        }
+        if (equippedSkin?.id === 'skin_takoyaki' && combatUI.type === 'reading') {
+          pData.gold = (pData.gold || 0) + 20;
+        }
+        if (equippedVFX?.id === 'vfx_r_pencil' && combatUI.type === 'mcq') {
+          pData.gold = (pData.gold || 0) + 8;
+        }
+        if (equippedSkin?.id === 'skin_r_shiba' && combatUI.type === 'vocab') {
+          pData.gold = (pData.gold || 0) + 6;
+        }
+        if (equippedChip?.id === 'chip_n_wa_ga') {
+          pData.gold = (pData.gold || 0) + 2;
+        }
+        if (activeSetBonus?.key === 'izakaya') {
+          pData.gold = (pData.gold || 0) + 10;
         }
       }
 
@@ -597,8 +653,18 @@ export default function App() {
         ? 5
         : (combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2)));
 
-      if (activeSetBonus && activeSetBonus.name.includes('櫻華')) {
+      if (activeSetBonus?.key === 'sakura') {
         dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.8));
+      }
+      if (activeSetBonus?.key === 'shachiku') {
+        dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.75));
+      }
+      if (equippedChip?.id === 'chip_r_keigo') {
+        dmgTaken = Math.max(1, dmgTaken - 3);
+      }
+      if (activeSetBonus?.key === 'izakaya' && Math.random() < 0.25) {
+        dmgTaken = 0;
+        showToast("🍻 醉拳閃避發動！完美躲過扣血！", "success");
       }
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((pData.hp || 100) - dmgTaken <= 0)) {
@@ -953,19 +1019,56 @@ export default function App() {
 
   const closeGacha = () => setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
 
+  const getCoreCost = (rarity) => (rarity === 'UR' ? 15 : (rarity === 'SSR' ? 8 : (rarity === 'R' ? 3 : 1)));
+
   const handleExchangeCore = (item) => {
-    const cost = item.rarity === 'UR' ? 15 : 8;
+    const cost = getCoreCost(item.rarity);
     if ((playerData.dataCores || 0) < cost) return showToast(`資料核心不足！需要 ${cost} 顆`, "error");
     const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
     if (isOwned) return showToast("你已經擁有此裝備！", "error");
 
-    sfx.playRareChime(item.rarity === 'UR');
+    sfx.playRareChime(item.rarity === 'UR' || item.rarity === 'SSR');
     saveGame({
       ...playerData,
       dataCores: playerData.dataCores - cost,
       inventory: [...(playerData.inventory || []), item]
     });
     showToast(`成功解析並解鎖：${item.item}！`, "success");
+  };
+
+  const handleClaimMilestone = (milestone) => {
+    const ownedIds = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
+    const claimed = playerData.claimedMilestones || [];
+    if (ownedIds.size < milestone.count) return showToast(`尚需解鎖 ${milestone.count - ownedIds.size} 件收藏！`, "error");
+    if (claimed.includes(milestone.count)) return;
+
+    sfx.playRareChime(milestone.count >= 25);
+    saveGame({
+      ...playerData,
+      gold: (playerData.gold || 0) + milestone.rewardGold,
+      dataCores: (playerData.dataCores || 0) + milestone.rewardCores,
+      claimedMilestones: [...claimed, milestone.count]
+    });
+    const coreMsg = milestone.rewardCores > 0 ? ` + ${milestone.rewardCores} 資料核心` : '';
+    showToast(`🏆 達成圖鑑里程碑【${milestone.title}】！獲得 ${milestone.rewardGold} G${coreMsg}`, "success");
+  };
+
+  const handleEquipSet = (setKey) => {
+    const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
+    const vfxItem = setItems.find(i => i.type === 'vfx');
+    const skinItem = setItems.find(i => i.type === 'skin');
+    const chipItem = setItems.find(i => i.type === 'chip');
+    if (!vfxItem || !skinItem || !chipItem) return;
+    sfx.playHit();
+    saveGame({
+      ...playerData,
+      equipped: {
+        vfx: vfxItem.id,
+        skin: skinItem.id,
+        chip: chipItem.id
+      }
+    });
+    showToast(`✨ 已一鍵著裝【${SET_BONUSES[setKey]?.name || setKey}】！`, "success");
   };
 
   const getRarityConfig = (rarity) => {
@@ -1148,8 +1251,17 @@ export default function App() {
             </button>
             
             <div className="grid grid-cols-3 gap-3 mt-1">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備庫</span>
+              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                {(() => {
+                  const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
+                  const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
+                  return claimable > 0 ? (
+                    <span className="absolute -top-1.5 -right-1.5 bg-amber-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full animate-bounce">
+                      領獎!
+                    </span>
+                  ) : null;
+                })()}
+                <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
               </button>
               <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
                 <ShoppingCart className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
@@ -1165,139 +1277,217 @@ export default function App() {
         )}
 
         {/* --- 裝備庫 --- */}
-        {screen === 'loadout' && (
-          <div className="flex-1 min-h-0 p-4 flex flex-col h-full bg-gray-950">
-            <h2 className="text-blue-400 font-black text-2xl mb-2 flex items-center gap-2 shrink-0"><Backpack /> 虛擬裝備圖鑑</h2>
+        {screen === 'loadout' && (() => {
+          const ownedIdSet = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
+          const ownedTotal = VIRTUAL_GACHA_POOL.filter(i => ownedIdSet.has(i.id)).length;
+          const totalPoolCount = VIRTUAL_GACHA_POOL.length;
+          const collectPct = Math.min(100, Math.round((ownedTotal / totalPoolCount) * 100));
+          const claimedList = playerData.claimedMilestones || [];
 
-            <div className="mb-4 bg-gray-900 border border-gray-800 p-3 rounded-xl shrink-0">
-              <div className="text-xs text-gray-400 font-bold mb-1 flex items-center gap-1">
-                <Layers size={14}/> 當前套裝共鳴狀態：
+          const renderCategoryCardList = (itemType, defaultId, defaultLabel, emptyTitle) => {
+            const categoryItems = VIRTUAL_GACHA_POOL.filter(i => i.type === itemType);
+            const isDefaultEquipped = itemType === 'chip'
+              ? !playerData.equipped?.chip
+              : playerData.equipped?.[itemType] === defaultId;
+
+            return (
+              <div className="grid grid-cols-1 gap-3">
+                <div
+                  onClick={() => saveGame({ ...playerData, equipped: { ...playerData.equipped, [itemType]: defaultId } })}
+                  className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${isDefaultEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}
+                >
+                  <span className="font-bold">{defaultLabel}</span>
+                  {isDefaultEquipped && <CheckCircle2 className="text-cyan-400" />}
+                </div>
+
+                {categoryItems.map((item, i) => {
+                  const isOwned = ownedIdSet.has(item.id);
+                  const isEquipped = playerData.equipped?.[itemType] === item.id;
+                  const setLabel = SET_BONUSES[item.set]?.name?.replace(' (3/3)', '');
+
+                  if (!isOwned) return (
+                    <div key={item.id || i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-60 select-none">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-bold text-gray-500">【???】{emptyTitle}</span>
+                        {setLabel && <span className="text-[10px] text-cyan-700 font-bold">套裝線索：{setLabel}</span>}
+                      </div>
+                      <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded text-gray-400"><Lock size={12}/> {item.rarity}</div>
+                    </div>
+                  );
+
+                  return (
+                    <div
+                      key={item.id || i}
+                      onClick={() => saveGame({ ...playerData, equipped: { ...playerData.equipped, [itemType]: item.id } })}
+                      className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30 shadow-[0_0_15px_rgba(6,182,212,0.2)]' : 'border-gray-700 bg-gray-800 hover:border-gray-500'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-black shrink-0 ${getRarityConfig(item.rarity).badge}`}>{item.rarity}</span>
+                          <span className={`font-bold truncate ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
+                        </div>
+                        {isEquipped && <CheckCircle2 className="text-cyan-400 shrink-0" />}
+                      </div>
+                      {setLabel && (
+                        <div className="text-[10px] text-cyan-300/90 font-bold">
+                          🧩 套裝：{setLabel}
+                        </div>
+                      )}
+                      {item.buff && (
+                        <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">
+                          🔥 {item.buff}
+                        </div>
+                      )}
+                      {item.desc && (
+                        <div className="text-[11px] text-gray-400 bg-gray-900/70 px-2.5 py-1.5 rounded-lg border border-gray-700/50 leading-relaxed">
+                          「{item.desc}」
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {activeSetBonus ? (
-                <div className="text-xs text-cyan-300 font-bold">
-                  {activeSetBonus.name}：<span className="text-gray-300 font-normal">{activeSetBonus.desc}</span>
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">
-                  未啟動共鳴（同系列裝備滿 3 件時啟動專屬學習加成）
-                </div>
-              )}
-            </div>
+            );
+          };
 
-            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-6 pb-4">
-              
-              {/* 戰術晶片區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold flex items-center gap-1"><Zap size={16}/> 戰術輔助晶片</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'chip').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').length}</span>
+          return (
+            <div className="flex-1 min-h-0 p-4 flex flex-col h-full bg-gray-950">
+              <div className="flex items-center justify-between mb-2 shrink-0">
+                <h2 className="text-blue-400 font-black text-2xl flex items-center gap-2"><Backpack /> 虛擬裝備圖鑑</h2>
+                <span className="text-xs font-black text-cyan-300 bg-cyan-950 px-2.5 py-1 rounded-full border border-cyan-700/60">
+                  總收集 {ownedTotal}/{totalPoolCount} ({collectPct}%)
+                </span>
+              </div>
+
+              <div className="mb-3 bg-gray-900 border border-gray-800 p-3 rounded-xl shrink-0">
+                <div className="text-xs text-gray-400 font-bold mb-1 flex items-center gap-1">
+                  <Layers size={14}/> 當前套裝共鳴狀態：
                 </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, chip: null}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${!playerData.equipped?.chip ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【未裝備晶片】</span>
-                     {!playerData.equipped?.chip && <CheckCircle2 className="text-cyan-400" />}
+                {activeSetBonus ? (
+                  <div className="text-xs text-cyan-300 font-bold">
+                    {activeSetBonus.name}：<span className="text-gray-300 font-normal">{activeSetBonus.desc}</span>
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.chip === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖晶片</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, chip: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 特效區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold">⚔️ 攻擊特效</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'vfx').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').length}</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, vfx: 'default'}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${playerData.equipped?.vfx === 'default' ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【預設】標準光斬</span>
-                     {playerData.equipped?.vfx === 'default' && <CheckCircle2 className="text-cyan-400" />}
+                ) : (
+                  <div className="text-xs text-gray-500">
+                    未啟動共鳴（同系列裝備滿 3 件時啟動專屬學習加成）
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.vfx === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖特效</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, vfx: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+                )}
               </div>
 
-              {/* 外觀區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold">👾 怪物外觀</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'skin').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').length}</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, skin: 'default'}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${playerData.equipped?.skin === 'default' ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【預設】病毒史萊姆</span>
-                     {playerData.equipped?.skin === 'default' && <CheckCircle2 className="text-cyan-400" />}
+              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-6 pb-4">
+
+                {/* 圖鑑里程碑進度與領獎 */}
+                <div className="bg-gray-900/80 border border-amber-800/40 rounded-2xl p-3.5 flex flex-col gap-3">
+                  <div className="flex justify-between items-center text-xs font-bold">
+                    <span className="text-amber-300 flex items-center gap-1"><Trophy size={14}/> 圖鑑里程碑獎勵</span>
+                    <span className="text-gray-400">已解鎖 {ownedTotal} 件</span>
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.skin === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖外觀</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, skin: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-cyan-500 via-amber-400 to-rose-500 transition-all duration-500" style={{ width: `${collectPct}%` }} />
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {COLLECTION_MILESTONES.map((m) => {
+                      const isClaimed = claimedList.includes(m.count);
+                      const canClaim = ownedTotal >= m.count && !isClaimed;
+                      return (
+                        <button
+                          key={m.count}
+                          onClick={() => handleClaimMilestone(m)}
+                          disabled={!canClaim && !isClaimed}
+                          className={`min-w-[130px] p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all shrink-0 ${
+                            isClaimed
+                              ? 'bg-gray-950 border-gray-800 text-gray-500 opacity-60'
+                              : canClaim
+                                ? 'bg-amber-950/70 border-amber-400 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.3)] animate-pulse active:scale-95'
+                                : 'bg-gray-950/70 border-gray-800 text-gray-400'
+                          }`}
+                        >
+                          <div className="text-[11px] font-black truncate">{m.title}</div>
+                          <div className="text-[10px] text-yellow-400 font-bold">
+                            +{m.rewardGold}G {m.rewardCores > 0 ? `/ +${m.rewardCores}核心` : ''}
+                          </div>
+                          <div className="text-[10px] font-black mt-0.5">
+                            {isClaimed ? '✅ 已領取' : (canClaim ? '🎁 點擊領取' : `進度 ${Math.min(ownedTotal, m.count)}/${m.count}`)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
+
+                {/* 套裝收集總覽 & 一鍵著裝 */}
+                <div className="flex flex-col gap-2">
+                  <div className="text-xs font-bold text-gray-400 flex items-center gap-1"><Sparkles size={14} className="text-cyan-400"/> 主題套裝共鳴一覽（集齊 3 件可一鍵著裝）</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(SET_BONUSES).map(([setKey, bonus]) => {
+                      const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
+                      const ownedInSet = setItems.filter(i => ownedIdSet.has(i.id)).length;
+                      const isComplete = ownedInSet >= 3;
+                      const isActive = activeSetBonus?.key === setKey;
+                      return (
+                        <div key={setKey} className={`p-2.5 rounded-xl border flex flex-col justify-between gap-1.5 ${isActive ? 'bg-cyan-950/50 border-cyan-400' : (isComplete ? 'bg-gray-900 border-emerald-600/60' : 'bg-gray-900/60 border-gray-800')}`}>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-black text-white truncate">{bonus.name.replace(' (3/3)', '')}</span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded shrink-0 ${isComplete ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-800 text-gray-400'}`}>
+                              {ownedInSet}/3
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-gray-400 leading-snug line-clamp-2">{bonus.desc}</div>
+                          {isComplete && (
+                            <button
+                              onClick={() => handleEquipSet(setKey)}
+                              className={`text-[10px] font-black py-1 rounded-lg transition-colors ${isActive ? 'bg-cyan-500 text-black' : 'bg-emerald-700 hover:bg-emerald-600 text-white'}`}
+                            >
+                              {isActive ? '⚡ 已啟動共鳴' : '⚡ 一鍵著裝'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 戰術晶片區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold flex items-center gap-1"><Zap size={16}/> 戰術輔助晶片</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('chip', null, '【未裝備晶片】', '未解鎖晶片')}
+                </div>
+
+                {/* 特效區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold">⚔️ 攻擊特效</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('vfx', 'default', '【預設】標準光斬', '未解鎖特效')}
+                </div>
+
+                {/* 外觀區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold">👾 怪物外觀</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('skin', 'default', '【預設】病毒史萊姆', '未解鎖外觀')}
+                </div>
+
               </div>
 
+              <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
+                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
+              </div>
             </div>
-
-            <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
-               <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* --- 戰鬥畫面 --- */}
         {screen === 'battle' && combatUI.data && (
@@ -1326,6 +1516,12 @@ export default function App() {
                      </div>
                    ))}
                  </div>
+
+                 {equippedSkin?.battleQuip && (
+                   <div className="mt-2 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
+                     {equippedSkin.battleQuip}
+                   </div>
+                 )}
 
                  {waveState.currentWave === 3 && combatUI.type === 'reading' && (
                    relaxedMode ? (
@@ -1717,27 +1913,32 @@ export default function App() {
             {/* 天井核心商店 Modal */}
             {showCoreShop && (
               <div className="absolute inset-0 z-40 bg-black/95 backdrop-blur-md flex flex-col p-5 animate-in zoom-in-95 duration-200">
-                <div className="flex justify-between items-center mb-4 shrink-0">
+                <div className="flex justify-between items-center mb-3 shrink-0">
                   <h3 className="font-black text-xl text-rose-400 flex items-center gap-2"><Hexagon /> 資料核心黑市 (天井兌換)</h3>
                   <button onClick={() => setShowCoreShop(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full"><X size={20}/></button>
                 </div>
-                <div className="text-xs text-gray-400 mb-4 bg-gray-900 p-3 rounded-lg border border-gray-800 shrink-0">
-                  重複裝備轉化為資料核心。這裡可免除隨機性，直接指定兌換神裝湊齊套裝！
+                <div className="text-xs text-gray-400 mb-3 bg-gray-900 p-3 rounded-lg border border-gray-800 shrink-0 flex justify-between items-center gap-2">
+                  <span>重複裝備轉化為資料核心，可免除隨機性直接補齊圖鑑與套裝！</span>
+                  <span className="text-rose-300 font-black bg-rose-950 px-2.5 py-1 rounded border border-rose-800 shrink-0">持有 {playerData.dataCores || 0} 核心</span>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3">
-                  {VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'SSR' || i.rarity === 'UR').map((item, i) => {
-                    const cost = item.rarity === 'UR' ? 15 : 8;
+                  {VIRTUAL_GACHA_POOL.map((item, i) => {
+                    const cost = getCoreCost(item.rarity);
                     const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
                     return (
-                      <div key={i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center">
-                        <div className="flex flex-col">
-                          <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                          <span className="text-[10px] text-gray-400 mt-0.5">{item.buff}</span>
+                      <div key={item.id || i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center gap-3">
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black shrink-0 ${getRarityConfig(item.rarity).badge}`}>{item.rarity}</span>
+                            <span className={`font-bold truncate ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
+                          </div>
+                          {item.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 {item.buff}</span>}
+                          {item.desc && <span className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">「{item.desc}」</span>}
                         </div>
                         <button
                           disabled={isOwned || (playerData.dataCores || 0) < cost}
                           onClick={() => handleExchangeCore(item)}
-                          className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
+                          className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-40'}`}
                         >
                           {isOwned ? '已擁有' : `${cost} 核心兌換`}
                         </button>
@@ -1751,27 +1952,35 @@ export default function App() {
             {/* 卡池詳情 Modal */}
             {showGachaDetails && (
               <div className="absolute inset-0 z-40 bg-black/90 backdrop-blur-sm flex flex-col p-6 animate-in zoom-in-95 duration-200">
-                <div className="flex justify-between items-center mb-6 shrink-0">
+                <div className="flex justify-between items-center mb-4 shrink-0">
                   <h3 className={`font-black text-xl ${showGachaDetails === 'virtual' ? 'text-blue-400' : 'text-yellow-400'}`}>
-                    {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情' : '🎁 實體卡池詳情'}
+                    {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情（全 33 件收藏）' : '🎁 實體卡池詳情'}
                   </h3>
                   <button onClick={() => setShowGachaDetails(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full hover:text-white"><X size={20}/></button>
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-6">
-                  {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(b.chance)-Number(a.chance)).map((p, i) => {
+                  {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(a.chance)-Number(b.chance)).map((p, i) => {
                     const itemRarity = p.rarity || (Number(p.chance) <= 9 ? 'SSR' : (Number(p.chance) <= 35 ? 'R' : 'N'));
                     const cfg = getRarityConfig(itemRarity);
+                    const isVirtual = showGachaDetails === 'virtual';
+                    const isOwned = isVirtual && (playerData.inventory || []).some(inv => inv?.id === p.id);
+                    const isUp = isVirtual && BANNER_THEMES[activeBannerIdx]?.featuredSet && BANNER_THEMES[activeBannerIdx].featuredSet === p.set && (itemRarity === 'SSR' || itemRarity === 'UR');
                     return (
-                      <div key={i} className="flex justify-between items-center bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow-sm">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                          <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{itemRarity}</span>
-                          <div className="flex flex-col truncate">
-                            <span className={`truncate text-base ${cfg.color}`}>{p.item}</span>
+                      <div key={p.id || i} className={`flex justify-between items-center bg-gray-800/80 p-3.5 rounded-xl border shadow-sm gap-2 ${isUp ? 'border-amber-400/70' : 'border-gray-700'}`}>
+                        <div className="flex items-start gap-2.5 overflow-hidden min-w-0">
+                          <span className={`text-xs px-2 py-1 rounded font-black shrink-0 mt-0.5 ${cfg.badge}`}>{itemRarity}</span>
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`font-bold text-sm sm:text-base ${cfg.color}`}>{p.item}</span>
+                              {isUp && <span className="text-[10px] bg-amber-500 text-black px-1.5 py-0.2 rounded font-black">UP!</span>}
+                              {isOwned && <span className="text-[10px] bg-emerald-900 text-emerald-300 border border-emerald-600/50 px-1.5 py-0.2 rounded font-bold">已收錄</span>}
+                            </div>
                             {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
+                            {p.desc && <span className="text-[11px] text-gray-400 mt-1 leading-snug">「{p.desc}」</span>}
                           </div>
                         </div>
-                        <span className="text-gray-300 font-black text-lg shrink-0 ml-2">{p.chance}%</span>
+                        <span className="text-gray-300 font-black text-base shrink-0 ml-2">{p.chance}%</span>
                       </div>
                     );
                   })}
