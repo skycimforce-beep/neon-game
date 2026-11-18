@@ -7,7 +7,18 @@ import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL, COL
 import { RubyText } from './components/RubyText';
 import { GachaModal } from './components/GachaModal';
 import { LoginScreen } from './components/LoginScreen';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers } from 'lucide-react';
+import { BattleReportModal } from './components/BattleReportModal';
+import { CodexScreen } from './components/CodexScreen';
+import {
+  DIFFICULTY_TIERS,
+  getQuestionTier,
+  getTierSummary,
+  getMasteryStage,
+  getFlashThreshold,
+  analyzeReadingPassage,
+  computeSkillProfile
+} from './utils/learningProgress';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -60,7 +71,11 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [practiceMode, setPracticeMode] = useState('mixed');
+  const [difficultyTier, setDifficultyTier] = useState('all');
   const [relaxedMode, setRelaxedMode] = useState(false);
+  const [showTranslationHint, setShowTranslationHint] = useState(false);
+  const [peekVocabWord, setPeekVocabWord] = useState(null);
+  const [battleReport, setBattleReport] = useState(null);
   
   const [playerData, setPlayerData] = useState({
     hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
@@ -69,10 +84,24 @@ export default function App() {
     inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
     pityCount: 0,
     dataCores: 0,
-    claimedMilestones: []
+    claimedMilestones: [],
+    bestAvgSpeed: 0,
+    lastAvgSpeed: 0,
+    nemesisSlainCount: 0,
+    mistakeCounts: {}
   });
   const playerDataRef = useRef(playerData);
   useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
+
+  const runStatsRef = useRef({
+    responseTimes: [],
+    flashCount: 0,
+    correctCount: 0,
+    totalAnswered: 0,
+    levelUps: [],
+    nemesisSlain: [],
+    bonusGold: 0
+  });
 
   const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: 'mixed' });
   const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
@@ -154,11 +183,21 @@ export default function App() {
   };
 
   const getUnmastered = (pool, count) => {
-    let unmastered = pool.filter(q => (masteryObj[q.id] || 0) < 3);
+    const tierFiltered = difficultyTier === 'all'
+      ? pool
+      : pool.filter(q => getQuestionTier(q.id) === Number(difficultyTier));
+    const primaryPool = tierFiltered.length > 0 ? tierFiltered : pool;
+
+    let unmastered = primaryPool.filter(q => (masteryObj[q.id] || 0) < 3);
     unmastered = shuffle(unmastered);
     if (unmastered.length < count) {
-      const mastered = shuffle(pool.filter(q => (masteryObj[q.id] || 0) >= 3));
+      const mastered = shuffle(primaryPool.filter(q => (masteryObj[q.id] || 0) >= 3));
       unmastered = [...unmastered, ...mastered.slice(0, count - unmastered.length)];
+    }
+    if (unmastered.length < count && primaryPool !== pool) {
+      const chosenIds = new Set(unmastered.map(x => x.id));
+      const fallback = shuffle(pool.filter(q => !chosenIds.has(q.id)));
+      unmastered = [...unmastered, ...fallback.slice(0, count - unmastered.length)];
     }
     return unmastered.slice(0, count);
   };
@@ -166,6 +205,8 @@ export default function App() {
   const loadEncounter = (encounter) => {
     if (!encounter) return;
     clearAnswerTimer();
+    setShowTranslationHint(false);
+    setPeekVocabWord(null);
     const baseTime = getReadingTimeLimit();
     let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
     if (encounter.type === 'mcq') {
@@ -303,6 +344,16 @@ export default function App() {
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
     clearAnswerTimer();
+    runStatsRef.current = {
+      responseTimes: [],
+      flashCount: 0,
+      correctCount: 0,
+      totalAnswered: 0,
+      levelUps: [],
+      nemesisSlain: [],
+      bonusGold: 0
+    };
+    setBattleReport(null);
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
     setCombo(0);
     setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: targetMode });
@@ -325,7 +376,11 @@ export default function App() {
           critRate: localData.critRate || 0.1,
           lastLoginDate: localData.lastLoginDate || '',
           mastery: localData.mastery || {},
-          claimedMilestones: localData.claimedMilestones || []
+          claimedMilestones: localData.claimedMilestones || [],
+          bestAvgSpeed: localData.bestAvgSpeed || 0,
+          lastAvgSpeed: localData.lastAvgSpeed || 0,
+          nemesisSlainCount: localData.nemesisSlainCount || 0,
+          mistakeCounts: localData.mistakeCounts || {}
         };
         playerDataRef.current = mergedLocal;
         setPlayerData(mergedLocal);
@@ -366,7 +421,11 @@ export default function App() {
             critRate: base.critRate || 0.1,
             lastLoginDate: base.lastLoginDate || '',
             mastery: mergedMastery,
-            claimedMilestones: mergedClaimed
+            claimedMilestones: mergedClaimed,
+            bestAvgSpeed: base.bestAvgSpeed || 0,
+            lastAvgSpeed: base.lastAvgSpeed || 0,
+            nemesisSlainCount: Math.max(data.nemesisSlainCount || 0, currentLocal.nemesisSlainCount || 0),
+            mistakeCounts: base.mistakeCounts || {}
           };
           playerDataRef.current = merged;
           setPlayerData(merged);
@@ -514,9 +573,39 @@ export default function App() {
       if (activeSetBonus?.key === 'chuuni') earnedGold += 100;
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
 
-      showToast(`🎉 區域肅清！獲得 ${earnedGold} G 學習津貼！`, "success");
       const latest = playerDataRef.current;
-      saveGame({ ...latest, hp: latest.maxHp || 100, gold: (latest.gold || 0) + earnedGold, bossKills: (latest.bossKills || 0) + 1 });
+      const stats = runStatsRef.current;
+      const avgSpeed = stats.responseTimes.length > 0
+        ? stats.responseTimes.reduce((s, v) => s + v, 0) / stats.responseTimes.length
+        : 0;
+      const prevBest = latest.bestAvgSpeed || 0;
+      const isNewBestSpeed = avgSpeed > 0 && (prevBest === 0 || avgSpeed < prevBest);
+      const nextBestSpeed = isNewBestSpeed ? avgSpeed : prevBest;
+
+      const updatedData = {
+        ...latest,
+        hp: latest.maxHp || 100,
+        gold: (latest.gold || 0) + earnedGold,
+        bossKills: (latest.bossKills || 0) + 1,
+        lastAvgSpeed: avgSpeed > 0 ? Number(avgSpeed.toFixed(2)) : (latest.lastAvgSpeed || 0),
+        bestAvgSpeed: nextBestSpeed > 0 ? Number(nextBestSpeed.toFixed(2)) : 0
+      };
+      saveGame(updatedData);
+
+      setBattleReport({
+        avgSpeed,
+        prevAvgSpeed: latest.lastAvgSpeed || 0,
+        isNewBestSpeed,
+        flashCount: stats.flashCount,
+        correctCount: stats.correctCount,
+        totalAnswered: stats.totalAnswered,
+        levelUps: stats.levelUps,
+        nemesisSlain: stats.nemesisSlain,
+        earnedGold: earnedGold + stats.bonusGold,
+        bonusGold: stats.bonusGold,
+        rankInfo: computeSkillProfile(updatedData)
+      });
+
       tts.stop();
       setScreen('menu');
     } else {
@@ -537,25 +626,47 @@ export default function App() {
     }
   };
 
+  const getEncounterLabel = (type, data) => {
+    if (!data) return '';
+    if (type === 'vocab') return data.ch;
+    if (type === 'sort') return `${data.context} ${data.example || ''}`.trim();
+    if (type === 'type') return `${data.base} → ${data.correct}`;
+    if (type === 'mcq') return data.options?.[data.correct] || data.question;
+    if (type === 'reading') return `${(data.text || '').slice(0, 22)}…`;
+    return '';
+  };
+
   const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
     if (isPaused || isAnsweringRef.current) return;
     isAnsweringRef.current = true;
     setIsAnswering(true);
-    let pData = { ...playerDataRef.current, mastery: { ...(playerDataRef.current.mastery || {}) } };
-    
+    let pData = {
+      ...playerDataRef.current,
+      mastery: { ...(playerDataRef.current.mastery || {}) },
+      mistakeCounts: { ...(playerDataRef.current.mistakeCounts || {}) }
+    };
+
+    const responseSec = combatUI.startTime ? Math.max(0.2, (Date.now() - combatUI.startTime) / 1000) : 5.0;
+    if (combatUI.type !== 'potion') {
+      runStatsRef.current.totalAnswered += 1;
+      runStatsRef.current.responseTimes.push(Math.min(60, responseSec));
+    }
+
     if (isCorrect) {
       sfx.playHit();
       const newCombo = combatUI.type === 'potion' ? combo : combo + 1;
       if (combatUI.type !== 'potion') setCombo(newCombo);
 
+      const isFlashRead = combatUI.type !== 'potion' && responseSec <= getFlashThreshold(combatUI.type);
       const comboBonus = 1 + Math.min(newCombo * 0.05, 0.4);
       let effectiveCrit = pData.critRate || 0.1;
       if (equippedVFX?.id === 'vfx_r1') effectiveCrit += 5;
       if (equippedChip?.id === 'chip_deadline' && (pData.hp || 100) < (pData.maxHp || 100) * 0.5) effectiveCrit += 35;
       if (activeSetBonus?.key === 'chuuni') effectiveCrit += 25;
-      let isCrit = Math.random() * 100 < effectiveCrit;
+      let isCrit = isFlashRead || Math.random() * 100 < effectiveCrit;
 
       let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
+      if (isFlashRead) dmg = Math.floor(dmg * 1.2);
       if (equippedChip?.id === 'chip_ramen') dmg = Math.floor(dmg * 1.4);
       else if (equippedChip?.id === 'chip_r_anime') dmg = Math.floor(dmg * 1.15);
       if (equippedVFX?.id === 'vfx_coffee' && newCombo >= 2) dmg = Math.floor(dmg * 1.25);
@@ -577,8 +688,15 @@ export default function App() {
       }
       pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
 
-      // Apply equipment combat gold buffs
+      // Apply equipment combat gold buffs & flash/nemesis tracking
       if (combatUI.type !== 'potion') {
+        runStatsRef.current.correctCount += 1;
+        if (isFlashRead) {
+          runStatsRef.current.flashCount += 1;
+          runStatsRef.current.bonusGold += 5;
+          pData.gold = (pData.gold || 0) + 5;
+          showToast(`⚡ 神速直覺 (${responseSec.toFixed(1)}s)！+5 G`, "success");
+        }
         if (waveState.currentIndex === 0 && !waveState.firstBonusUsed && equippedSkin?.id === 'skin_cyber') {
           pData.gold = (pData.gold || 0) + 50;
           setWaveState(prev => ({ ...prev, firstBonusUsed: true }));
@@ -607,13 +725,37 @@ export default function App() {
       }
 
       if (combatUI.type !== 'potion' && combatUI.data) {
-        pData.mastery[combatUI.data.id] = (pData.mastery[combatUI.data.id] || 0) + 1;
+        const qId = combatUI.data.id;
+        const prevLv = pData.mastery[qId] || 0;
+        const nextLv = prevLv + 1;
+        pData.mastery[qId] = nextLv;
         pData.vocabKills = (pData.vocabKills || 0) + 1;
+
+        const qLabel = getEncounterLabel(combatUI.type, combatUI.data);
+        if (prevLv < 3) {
+          runStatsRef.current.levelUps.push({ id: qId, label: qLabel, fromLv: prevLv, toLv: Math.min(3, nextLv) });
+          if (nextLv === 3) {
+            showToast(`👑 完全掌握解鎖！此題已達 Lv.3 直覺反射`, "success");
+          }
+        }
+
+        // Nemesis check & defeat
+        const prevFails = pData.mistakeCounts[qId] || 0;
+        if (prevFails >= 2) {
+          pData.mistakeCounts[qId] = 0;
+          pData.nemesisSlainCount = (pData.nemesisSlainCount || 0) + 1;
+          pData.gold = (pData.gold || 0) + 30;
+          runStatsRef.current.bonusGold += 30;
+          runStatsRef.current.nemesisSlain.push({ id: qId, label: qLabel });
+          showToast("⚔️ 宿敵討伐成功！獲得雙倍突破獎金 +30 G！", "success");
+        } else if (prevFails > 0) {
+          pData.mistakeCounts[qId] = 0;
+        }
 
         if (waveState.mode === 'mistakes') {
           const prevLen = (pData.mistakes || []).length;
-          pData.mistakes = (pData.mistakes || []).filter(m => m.id !== combatUI.data.id && m.q !== mistakeInfo?.q);
-          if (pData.mistakes.length < prevLen) {
+          pData.mistakes = (pData.mistakes || []).filter(m => m.id !== qId && m.q !== mistakeInfo?.q);
+          if (pData.mistakes.length < prevLen && prevFails < 2) {
             showToast("✅ 已攻克錯題！自動移出錯誤日誌", "success");
           }
         }
@@ -674,7 +816,15 @@ export default function App() {
       }
 
       pData.hp = Math.max(0, (pData.hp || 100) - dmgTaken);
-      if (combatUI.type !== 'potion' && combatUI.data) pData.mastery[combatUI.data.id] = 0;
+      if (combatUI.type !== 'potion' && combatUI.data) {
+        const qId = combatUI.data.id;
+        pData.mastery[qId] = 0;
+        const nextFails = (pData.mistakeCounts[qId] || 0) + 1;
+        pData.mistakeCounts[qId] = nextFails;
+        if (nextFails === 2) {
+          showToast("🔴 此題已列為「宿敵弱點」！擊破後可獲雙倍獎勵", "info");
+        }
+      }
       if (mistakeInfo && combatUI.type !== 'potion') {
         const entry = { id: combatUI.data?.id, type: combatUI.type, ...mistakeInfo };
         const filteredMistakes = (pData.mistakes || []).filter(
@@ -1143,6 +1293,9 @@ export default function App() {
         closeGacha={closeGacha}
       />
 
+      {/* --- 戰後大腦語譯戰報 --- */}
+      <BattleReportModal report={battleReport} onClose={() => setBattleReport(null)} />
+
       {/* --- Header --- */}
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
         <div className="flex justify-between items-center text-sm">
@@ -1171,16 +1324,49 @@ export default function App() {
           <LoginScreen onLogin={handleLoginSuccess} />
         )}
         {/* --- 主選單 --- */}
-        {screen === 'menu' && (
-          <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
+        {screen === 'menu' && (() => {
+          const skillProfile = computeSkillProfile(playerData);
+          const tierStats = getTierSummary(masteryObj);
+          const nemesisPendingCount = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
 
-            <div className="bg-gray-900/80 p-5 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-4">
+          return (
+          <div className="flex-1 flex flex-col p-4 gap-3.5 justify-center">
+
+            <div className="bg-gray-900/80 p-4 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-3">
+              {/* 玩家階級與語感速度摘要 */}
+              <div className="flex items-center justify-between gap-2 bg-gray-950/80 p-2.5 rounded-xl border border-cyan-900/60">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xl shrink-0">{skillProfile.currentRank.badge}</span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-black text-cyan-200 truncate">{skillProfile.currentRank.title}</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${skillProfile.rankProgressPct}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-400 font-bold">{skillProfile.xp} XP</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {(playerData.bestAvgSpeed || 0) > 0 && (
+                    <span className="text-[10px] font-black text-amber-300 bg-amber-950/60 border border-amber-700/50 px-2 py-1 rounded-lg">
+                      ⚡ {playerData.bestAvgSpeed.toFixed(1)}s
+                    </span>
+                  )}
+                  {(playerData.nemesisSlainCount || 0) > 0 && (
+                    <span className="text-[10px] font-black text-rose-300 bg-rose-950/60 border border-rose-700/50 px-2 py-1 rounded-lg">
+                      ⚔️ {playerData.nemesisSlainCount}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-cyan-400 font-black text-sm tracking-wider">
                   <span className="flex items-center gap-1"><Target size={16}/> 世界淨化進度</span>
                   <span className="animate-pulse">{purificationRate}%</span>
                 </div>
-                <div className="h-4 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
+                <div className="h-3.5 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
                   <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_cyan] rounded-full" style={{ width: `${purificationRate}%` }}></div>
                 </div>
                 <div className="flex justify-between items-center mt-1">
@@ -1200,7 +1386,7 @@ export default function App() {
 
               {/* 當前啟用的套裝共鳴提示 */}
               {activeSetBonus && (
-                <div className="bg-cyan-950/40 border border-cyan-600/50 p-3 rounded-xl flex items-center justify-between text-xs">
+                <div className="bg-cyan-950/40 border border-cyan-600/50 p-2.5 rounded-xl flex items-center justify-between text-xs">
                   <div className="flex flex-col">
                     <span className="text-cyan-300 font-black flex items-center gap-1"><Layers size={14}/> {activeSetBonus.name}</span>
                     <span className="text-gray-400 mt-0.5">{activeSetBonus.desc}</span>
@@ -1209,16 +1395,44 @@ export default function App() {
                 </div>
               )}
 
-              <div className="w-full h-px bg-cyan-900/30"></div>
-
               <div className="grid grid-cols-2 gap-2 text-sm text-center">
                 <div className="bg-gray-800/50 p-2 rounded text-red-300 border border-gray-700/50">攻 {playerData.atk || 10}</div>
                 <div className="bg-gray-800/50 p-2 rounded text-blue-300 border border-gray-700/50">防 {playerData.def || 5}</div>
               </div>
-              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-4 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
+              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-3.5 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
                 <CalendarCheck size={18} />
                 {playerData.lastLoginDate === getLocalDateString() ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
               </button>
+            </div>
+
+            {/* 漸進式難度分級 */}
+            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={14}/> 難度階層篩選</span>
+                {nemesisPendingCount > 0 && (
+                  <span className="text-[10px] font-black text-rose-300 bg-rose-950/70 border border-rose-700/60 px-2 py-0.5 rounded-full">
+                    🔴 潛伏宿敵 {nemesisPendingCount} 題
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {DIFFICULTY_TIERS.map((t) => {
+                  const st = t.id === 'all' ? null : tierStats[Number(t.id)];
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setDifficultyTier(t.id)}
+                      className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                    >
+                      <div className="flex justify-between items-center gap-1">
+                        <span className="text-[11px] font-black truncate">{t.label}</span>
+                        {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
+                      </div>
+                      <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* 訓練單元選擇 & 休閒模式切換 */}
@@ -1246,12 +1460,12 @@ export default function App() {
               </div>
             </div>
 
-            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-5 rounded-xl flex items-center justify-center gap-3 text-xl font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
-              <Play size={26} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
+            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-4 rounded-xl flex items-center justify-center gap-3 text-lg font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
+              <Play size={24} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
             </button>
             
-            <div className="grid grid-cols-3 gap-3 mt-1">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform relative">
+            <div className="grid grid-cols-2 gap-2.5">
+              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
                 {(() => {
                   const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
                   const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
@@ -1261,20 +1475,24 @@ export default function App() {
                     </span>
                   ) : null;
                 })()}
-                <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
+                <Backpack size={18} className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
               </button>
-              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <ShoppingCart className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
+              <button onClick={() => setScreen('codex')} className="bg-emerald-900/30 border border-emerald-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                <Brain size={18} className="text-emerald-400"/> <span className="text-xs font-bold">能力圖鑑</span>
               </button>
-              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform relative">
+              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                <ShoppingCart size={18} className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
+              </button>
+              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
                 {(playerData.mistakes || []).length > 0 && (
                   <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full">{(playerData.mistakes || []).length}</span>
                 )}
-                <Database className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
+                <Database size={18} className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* --- 裝備庫 --- */}
         {screen === 'loadout' && (() => {
@@ -1489,8 +1707,22 @@ export default function App() {
           );
         })()}
 
+        {/* --- 日語能力樹＆圖鑑 --- */}
+        {screen === 'codex' && (
+          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} />
+        )}
+
         {/* --- 戰鬥畫面 --- */}
-        {screen === 'battle' && combatUI.data && (
+        {screen === 'battle' && combatUI.data && (() => {
+           const isNonPotion = combatUI.type !== 'potion';
+           const currentLv = isNonPotion ? (masteryObj[combatUI.data.id] || 0) : 0;
+           const currentFailCnt = isNonPotion ? (playerData.mistakeCounts?.[combatUI.data.id] || 0) : 0;
+           const stage = isNonPotion ? getMasteryStage(currentLv, currentFailCnt) : null;
+           const tier = isNonPotion ? getQuestionTier(combatUI.data.id) : null;
+           const isNemesis = isNonPotion && currentFailCnt >= 2 && currentLv === 0;
+           const readingAnalysis = combatUI.type === 'reading' ? analyzeReadingPassage(combatUI.data.text, masteryObj) : null;
+
+           return (
            <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
              <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-2">
@@ -1500,15 +1732,31 @@ export default function App() {
                <button onClick={() => setIsPaused(true)} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
              </div>
 
+             {isNonPotion && stage && (
+               <div className="flex flex-wrap items-center justify-center gap-1.5 mb-1.5 z-10 shrink-0">
+                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-gray-900 text-gray-300 border border-gray-700">
+                   難度 Lv.{tier}
+                 </span>
+                 <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${stage.badgeClass}`}>
+                   {stage.label}
+                 </span>
+                 {isNemesis && (
+                   <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-200 border border-rose-500 animate-pulse flex items-center gap-1">
+                     <Swords size={11} /> 宿敵警報（曾錯 {currentFailCnt} 次・擊破 +30G）
+                   </span>
+                 )}
+               </div>
+             )}
+
              <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
                {combo > 1 && (<div className={`font-black italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
              </div>
 
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[160px]">
+               <div className="relative flex flex-col items-center justify-center my-auto min-h-[150px]">
                  {renderVFX()}
 
-                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400'}`}>
+                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${isNemesis ? 'bg-rose-950 border-rose-500 text-rose-400 animate-pulse drop-shadow-[0_0_20px_rgba(244,63,94,0.6)]' : (waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400')}`}>
                    {renderMonsterEmoji()}
                    {damageNumbers.map(d => (
                      <div key={d.id} className={`absolute font-black pointer-events-none drop-shadow-md flex items-center gap-1 ${d.isHeal ? 'text-green-400 text-3xl' : (d.isCrit ? 'text-yellow-400 text-4xl' : 'text-white text-2xl')}`} style={{ left: `calc(50% + ${d.offsetX}px)`, top: '10%', animation: 'damage-float 1s ease-out forwards' }}>
@@ -1542,7 +1790,7 @@ export default function App() {
                      <div className="text-center text-xs font-bold text-cyan-400 tracking-wider mb-1">
                        {combatUI.data.vocabMode === 'meaning' ? '📖 請選擇正確中文意思' : '🔤 請選擇正確讀音'}
                      </div>
-                     <div className="flex items-center justify-center gap-3 mb-8 pt-2">
+                     <div className="flex items-center justify-center gap-3 mb-2 pt-2">
                        <div className="text-center text-5xl font-black tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
                        {tts.isSupported() && (
                          <button type="button" onClick={() => tts.speak(combatUI.data.ch)} title="朗讀單字" className="p-2.5 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/60 text-cyan-300 active:scale-90 transition-transform shrink-0">
@@ -1550,20 +1798,32 @@ export default function App() {
                          </button>
                        )}
                      </div>
+                     <div className="min-h-[24px] flex justify-center mb-4">
+                       {currentLv === 0 && combatUI.data.vocabMode === 'reading' && combatUI.data.answers?.[0] && (
+                         <span className="text-[11px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/50 px-3 py-0.5 rounded-full">
+                           💡 輔助提示：讀音共 {combatUI.data.answers[0].length} 個假名
+                         </span>
+                       )}
+                       {currentLv >= 2 && (
+                         <span className="text-[11px] font-bold text-amber-300/90 bg-amber-950/40 border border-amber-700/40 px-3 py-0.5 rounded-full">
+                           🔥 進階熟練態：無假名提示・直覺速答觸發閃電爆擊
+                         </span>
+                       )}
+                     </div>
                      <div className={`grid gap-3 ${combatUI.data.vocabMode === 'meaning' ? 'grid-cols-1' : 'grid-cols-2'}`}>
                        {(combatUI.data.options || []).map((opt, i) => (
                          <button key={i} onClick={() => handleVocabClick(opt)} className={`bg-gray-800 border-2 border-cyan-900 p-4 sm:p-5 rounded-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold ${combatUI.data.vocabMode === 'meaning' ? 'text-base sm:text-lg text-left' : 'text-xl text-center'}`}>
-                           <RubyText text={opt} showRuby={false} />
+                           <RubyText text={opt} showRuby={currentLv === 0} />
                          </button>
                        ))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'sort' && (
-                   <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4">
+                   <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4">
                      <div className="flex flex-col items-center justify-center gap-1.5 bg-gray-900/50 p-3 rounded-lg border border-gray-800">
                        <div className="flex items-center justify-center gap-2">
-                         <div className="text-center text-gray-200 text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                         <div className="text-center text-gray-200 text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={currentLv === 0} /></div>
                          {tts.isSupported() && (
                            <button type="button" onClick={() => tts.speak(combatUI.data.context)} title="朗讀題幹" className="p-2 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform shrink-0">
                              <Volume2 size={16} />
@@ -1571,27 +1831,47 @@ export default function App() {
                          )}
                        </div>
                        {combatUI.data.translation && (
-                         <div className="text-xs sm:text-sm text-cyan-300/90 font-bold text-center">
-                           🎯 句意：{combatUI.data.translation}
-                         </div>
+                         currentLv < 2 || showTranslationHint ? (
+                           <div className="text-xs sm:text-sm text-cyan-300/90 font-bold text-center">
+                             🎯 句意：{combatUI.data.translation}
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => setShowTranslationHint(true)}
+                             className="text-[11px] text-amber-300 bg-amber-950/50 hover:bg-amber-900/50 border border-amber-700/60 px-3 py-1 rounded-full font-bold flex items-center gap-1 active:scale-95 transition-transform"
+                           >
+                             <Eye size={12} /> 🔥 Lv.{currentLv} 進階無翻譯挑戰（點擊偷看中譯）
+                           </button>
+                         )
                        )}
                      </div>
                      <div className="flex justify-center gap-1.5 sm:gap-2">
-                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`flex-1 min-w-0 min-h-[4rem] px-1.5 py-1 rounded-lg border-2 flex items-center justify-center text-xs sm:text-sm text-center break-all transition-all leading-snug ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-[1.02]' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={false}/></button>))}
+                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`flex-1 min-w-0 min-h-[4rem] px-1.5 py-1 rounded-lg border-2 flex items-center justify-center text-xs sm:text-sm text-center break-all transition-all leading-snug ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-[1.02]' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={currentLv === 0}/></button>))}
                      </div>
-                     <div className="grid grid-cols-2 gap-3 mt-2">
-                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-3.5 sm:p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-snug break-all ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={false} /></button>))}
+                     <div className="grid grid-cols-2 gap-3 mt-1">
+                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-3.5 sm:p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-snug break-all ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={currentLv === 0} /></button>))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'type' && (
                    <form onSubmit={handleTypeSubmit} className="flex flex-col gap-3.5 animate-in slide-in-from-bottom-4">
-                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2">
-                       <div className="text-center text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.prompt} showRuby={false} /></div>
+                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2 items-center">
+                       <div className="text-center text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.prompt} showRuby={currentLv === 0} /></div>
                        {combatUI.data.exampleZh && (
-                         <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2">
-                           🎯 目標句意：{combatUI.data.exampleZh}
-                         </div>
+                         currentLv < 2 || showTranslationHint ? (
+                           <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2 w-full">
+                             🎯 目標句意：{combatUI.data.exampleZh}
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => setShowTranslationHint(true)}
+                             className="text-[11px] text-amber-300 bg-amber-950/50 hover:bg-amber-900/50 border border-amber-700/60 px-3 py-1 rounded-full font-bold flex items-center gap-1 active:scale-95 transition-transform"
+                           >
+                             <Eye size={12} /> 🔥 Lv.{currentLv} 進階無翻譯挑戰（點擊偷看中譯）
+                           </button>
+                         )
                        )}
                      </div>
                      {combatUI.data.base && (
@@ -1605,11 +1885,11 @@ export default function App() {
                  )}
                  {combatUI.type === 'mcq' && (
                    <div className="flex flex-col h-full animate-in zoom-in-95">
-                     <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={false} /></div>
+                     <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={currentLv === 0} /></div>
                      <div className="grid grid-cols-1 gap-2 mt-4">
                        {combatUI.data.options.map((opt, idx) => (
                          <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold leading-loose">
-                           <RubyText text={opt} showRuby={true} />
+                           <RubyText text={opt} showRuby={currentLv === 0} />
                          </button>
                        ))}
                      </div>
@@ -1631,18 +1911,78 @@ export default function App() {
                      </div>
                    </div>
                  )}
-                 {combatUI.type === 'reading' && (
-                   <div className="flex flex-col gap-4 overflow-y-auto max-h-[60vh] animate-in fade-in">
-                     <div className="bg-gray-900 border border-red-900/50 p-5 rounded-xl text-base text-gray-200 leading-[2.5] shadow-inner">
+                 {combatUI.type === 'reading' && readingAnalysis && (
+                   <div className="flex flex-col gap-3 overflow-y-auto max-h-[62vh] animate-in fade-in">
+                     {/* 已知單字解碼條 */}
+                     <div className="bg-cyan-950/40 border border-cyan-800/60 p-2.5 rounded-xl flex flex-col gap-1.5">
+                       <div className="flex justify-between items-center text-[11px] font-bold">
+                         <span className="text-cyan-300 flex items-center gap-1">
+                           <Brain size={13} /> 已知單字解碼：已辨識 {readingAnalysis.knownCount} / {readingAnalysis.matchedWords.length} 個詞彙
+                         </span>
+                         <span className="text-emerald-300 font-black">{readingAnalysis.decodeRate}%</span>
+                       </div>
+                       <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                         <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style={{ width: `${readingAnalysis.decodeRate}%` }} />
+                       </div>
+                       {readingAnalysis.knownCount > 0 && (
+                         <div className="text-[10px] text-gray-400">
+                           💡 點擊文中高亮詞彙可即時偷看過去學過的假名與中文解釋
+                         </div>
+                       )}
+                     </div>
+
+                     <div className="bg-gray-900 border border-red-900/50 p-4 rounded-xl text-base text-gray-200 leading-[2.3] shadow-inner">
                        {tts.isSupported() && (
                          <button type="button" onClick={() => tts.speak(combatUI.data.text)} title="朗讀文章" className="float-right ml-2 mb-1 p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
                            <Volume2 size={14} /> 朗讀
                          </button>
                        )}
-                       <RubyText text={combatUI.data.text} showRuby={false} />
+                       {readingAnalysis.segments.map((seg, idx) => (
+                         seg.match ? (
+                           <button
+                             key={idx}
+                             type="button"
+                             onClick={() => setPeekVocabWord(seg.match)}
+                             className={`inline font-bold px-1 mx-0.5 rounded border-b-2 transition-colors ${
+                               seg.match.mastery >= 3
+                                 ? 'text-amber-300 bg-amber-950/50 border-amber-400/80 hover:bg-amber-900/60'
+                                 : 'text-cyan-300 bg-cyan-950/50 border-cyan-400/80 hover:bg-cyan-900/60'
+                             }`}
+                           >
+                             {seg.text}
+                           </button>
+                         ) : (
+                           <span key={idx}>{seg.text}</span>
+                         )
+                       ))}
                      </div>
-                     <div className="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
-                       <p className="font-bold text-cyan-200 text-lg mb-5 leading-loose"><RubyText text={combatUI.data.questions[combatUI.readingStep].q} showRuby={false} /></p>
+
+                     {peekVocabWord && (
+                       <div className="bg-gray-950 border border-cyan-500/70 p-3 rounded-xl flex items-center justify-between gap-2 animate-in fade-in duration-150">
+                         <div className="flex flex-col min-w-0">
+                           <div className="text-sm font-black text-cyan-200 flex items-center gap-1.5 flex-wrap">
+                             <RubyText text={peekVocabWord.ch} showRuby={true} />
+                             <span className={`text-[10px] px-1.5 py-0.5 rounded ${peekVocabWord.mastery >= 3 ? 'bg-amber-500/20 text-amber-300' : 'bg-cyan-500/20 text-cyan-300'}`}>
+                               Lv.{Math.min(3, peekVocabWord.mastery)}
+                             </span>
+                           </div>
+                           <div className="text-xs text-gray-300 mt-0.5">{peekVocabWord.usage}</div>
+                         </div>
+                         <div className="flex items-center gap-1.5 shrink-0">
+                           {tts.isSupported() && (
+                             <button type="button" onClick={() => tts.speak(peekVocabWord.ch)} className="p-1.5 rounded-lg bg-gray-800 hover:bg-cyan-900 text-cyan-300">
+                               <Volume2 size={14} />
+                             </button>
+                           )}
+                           <button type="button" onClick={() => setPeekVocabWord(null)} className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400">
+                             <X size={14} />
+                           </button>
+                         </div>
+                       </div>
+                     )}
+
+                     <div className="bg-gray-800 p-4 rounded-xl shadow-lg border border-gray-700">
+                       <p className="font-bold text-cyan-200 text-lg mb-4 leading-loose"><RubyText text={combatUI.data.questions[combatUI.readingStep].q} showRuby={false} /></p>
                        <div className="flex flex-col gap-3">
                          {combatUI.data.questions[combatUI.readingStep].options.map((opt, i) => (<button key={i} onClick={() => handleReadingClick(i)} className="p-4 rounded-xl border-2 border-gray-600 bg-gray-900 text-left hover:bg-gray-800 active:scale-95 transition-transform font-bold leading-loose"><RubyText text={opt} showRuby={false} /></button>))}
                        </div>
@@ -1720,7 +2060,8 @@ export default function App() {
               </div>
             )}
            </div>
-        )}
+           );
+        })()}
 
         {/* --- 商城 --- */}
         {screen === 'shop' && (
