@@ -1295,11 +1295,29 @@ export default function App() {
     if (combatFx === 'heal') return <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-green-500/20 rounded-full blur-xl z-0" style={{ animation: 'flash-white 0.5s ease-out forwards' }} />;
   };
 
-  if (isLoading) return <div className="min-h-screen bg-gray-950 text-cyan-50 flex justify-center items-center">系統初始化中...</div>;
+  if (isLoading) return <div className="min-h-screen bg-gray-950 text-cyan-50 flex justify-center items-center font-cyber">系統初始化中...</div>;
   const currentRarityConfig = getRarityConfig(gachaState.displayRarity);
 
+  const isNemesisBattle =
+    screen === 'battle' &&
+    combatUI.data &&
+    combatUI.type !== 'potion' &&
+    (playerData.mistakeCounts?.[combatUI.data.id] || 0) >= 2 &&
+    (masteryObj[combatUI.data.id] || 0) === 0;
+  const isBossBattle = screen === 'battle' && waveState.currentWave === 3 && combatUI.type !== 'potion';
+  const ambientGlowStyle = isNemesisBattle || isBossBattle
+    ? 'radial-gradient(circle at 50% 30%, rgba(244, 63, 94, 0.24) 0%, rgba(153, 27, 27, 0.08) 45%, transparent 75%)'
+    : (screen === 'battle' && combo >= 3
+      ? 'radial-gradient(circle at 50% 30%, rgba(251, 191, 36, 0.2) 0%, rgba(245, 158, 11, 0.06) 45%, transparent 75%)'
+      : 'radial-gradient(circle at 50% 28%, rgba(6, 182, 212, 0.18) 0%, rgba(16, 185, 129, 0.05) 45%, transparent 75%)');
+
   return (
-    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+
+      {/* Cyber Atmosphere Layers */}
+      <div className="absolute inset-0 pointer-events-none z-0 cyber-grid-bg" />
+      <div className="absolute inset-0 pointer-events-none z-0 transition-all duration-700" style={{ background: ambientGlowStyle }} />
+      <div className="absolute inset-0 pointer-events-none z-0 cyber-scanlines opacity-70" />
 
       <style>{`
         @keyframes ring-spin-right { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1337,10 +1355,10 @@ export default function App() {
       <BattleReportModal report={battleReport} onClose={() => setBattleReport(null)} />
 
       {/* --- Header --- */}
-      <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
+      <header className="bg-gray-900/90 backdrop-blur-md p-4 border-b border-cyan-800/80 flex flex-col gap-2 z-10 shrink-0">
         <div className="flex justify-between items-center text-sm gap-2">
           <div className="flex flex-col min-w-0">
-            <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+            <span className="text-cyan-400 font-black font-cyber tracking-wider flex items-center gap-1.5"><Terminal size={16}/> N4 語譯駭客</span>
             {account && (
               <div className="flex items-center gap-1.5 text-xs text-gray-400 font-mono min-w-0">
                 {account.mode === 'email' ? <Mail size={11} className="text-cyan-500 shrink-0" /> : <Smartphone size={11} className="text-cyan-500 shrink-0" />}
