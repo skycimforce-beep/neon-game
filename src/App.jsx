@@ -1,11 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
+import { tts } from './utils/tts';
+import { toHiragana } from './utils/ruby';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
-import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL } from './data/gachaPool';
+import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL, COLLECTION_MILESTONES } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
 import { GachaModal } from './components/GachaModal';
 import { LoginScreen } from './components/LoginScreen';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers } from 'lucide-react';
+import { BattleReportModal } from './components/BattleReportModal';
+import { CodexScreen } from './components/CodexScreen';
+import {
+  DIFFICULTY_TIERS,
+  getQuestionTier,
+  getTierSummary,
+  getMasteryStage,
+  getFlashThreshold,
+  analyzeReadingPassage,
+  computeSkillProfile
+} from './utils/learningProgress';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -26,28 +39,106 @@ try {
 } catch (e) {}
 const SAVE_ID = 'neon-game-n4';
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+const getLocalDateString = (d = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const VOCAB_IDS = new Set(VOCAB_DATA.map(q => q.id));
+const SORT_IDS = new Set(GRAMMAR_SORT_DATA.map(q => q.id));
+const TYPE_IDS = new Set(GRAMMAR_TYPE_DATA.map(q => q.id));
+const MCQ_IDS = new Set(GRAMMAR_MCQ_DATA.map(q => q.id));
+const READING_IDS = new Set(READING_DATA.map(q => q.id));
+const VALID_ENEMY_IDS = new Set([...VOCAB_IDS, ...SORT_IDS, ...TYPE_IDS, ...MCQ_IDS, ...READING_IDS]);
+
+const PRACTICE_MODES = [
+  { id: 'mixed', label: '綜合闖關', desc: '全題型 3 波挑戰' },
+  { id: 'vocab', label: '單字特訓', desc: '讀音＋詞義辨析' },
+  { id: 'sort', label: '文法重組', desc: '句子結構排序' },
+  { id: 'type', label: '動詞變化', desc: '活用形詠唱輸入' },
+  { id: 'mcq', label: '文法選擇', desc: 'N4 句型接續測驗' },
+  { id: 'reading', label: '閱讀理解', desc: '長文閱讀分析' }
+];
+
+const createDefaultPlayerData = () => ({
+  hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
+  critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
+  gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
+  inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
+  pityCount: 0,
+  dataCores: 0,
+  claimedMilestones: [],
+  bestAvgSpeed: 0,
+  lastAvgSpeed: 0,
+  nemesisSlainCount: 0,
+  mistakeCounts: {}
+});
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [callsign, setCallsign] = useState(null);
+  const [isAuthResolved, setIsAuthResolved] = useState(false);
+  const [account, setAccount] = useState(null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [practiceMode, setPracticeMode] = useState('mixed');
+  const [difficultyTier, setDifficultyTier] = useState('all');
+  const [relaxedMode, setRelaxedMode] = useState(false);
+  const [vocabHintEnabled, setVocabHintEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('neon_game_vocab_hint') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [showTranslationHint, setShowTranslationHint] = useState(false);
+  const [peekVocabWord, setPeekVocabWord] = useState(null);
+  const [battleReport, setBattleReport] = useState(null);
+
+  const toggleVocabHint = () => {
+    setVocabHintEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('neon_game_vocab_hint', String(next));
+      } catch { /* ignore storage errors */ }
+      return next;
+    });
+  };
   
-  const [playerData, setPlayerData] = useState({
-    hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-    critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
-    gachaPool: DEFAULT_GACHA_POOL, isGachaLocked: false, gachaHistory: [],
-    inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
-    pityCount: 0,
-    dataCores: 0
+  const [playerData, setPlayerData] = useState(createDefaultPlayerData);
+  const playerDataRef = useRef(playerData);
+  useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
+
+  const runStatsRef = useRef({
+    responseTimes: [],
+    flashCount: 0,
+    correctCount: 0,
+    totalAnswered: 0,
+    levelUps: [],
+    nemesisSlain: [],
+    bonusGold: 0
   });
 
-  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false });
-  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 60 });
+  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: 'mixed' });
+  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
   const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
   const [isPaused, setIsPaused] = useState(false);
+  const [isAnswering, setIsAnswering] = useState(false);
+  const isAnsweringRef = useRef(false);
+  const answerTimerRef = useRef(null);
+
+  const clearAnswerTimer = () => {
+    if (answerTimerRef.current) {
+      clearTimeout(answerTimerRef.current);
+      answerTimerRef.current = null;
+    }
+    isAnsweringRef.current = false;
+    setIsAnswering(false);
+  };
+  useEffect(() => () => clearAnswerTimer(), []);
 
   const [shopTab, setShopTab] = useState('gacha');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
@@ -82,10 +173,10 @@ export default function App() {
   const triggerFx = (type) => { setCombatFx(type); setTimeout(() => setCombatFx(null), 500); };
   const triggerScreenShake = () => { setScreenShake(true); setTimeout(() => setScreenShake(false), 300); };
 
-  const TOTAL_ENEMIES = VOCAB_DATA.length + GRAMMAR_SORT_DATA.length + GRAMMAR_TYPE_DATA.length + READING_DATA.length + GRAMMAR_MCQ_DATA.length;
+  const TOTAL_ENEMIES = VALID_ENEMY_IDS.size;
   const masteryObj = playerData.mastery || {};
-  const masteredCount = Object.values(masteryObj).filter(c => c >= 3).length;
-  const purificationRate = Math.floor((masteredCount / TOTAL_ENEMIES) * 100);
+  const masteredCount = Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VALID_ENEMY_IDS.has(id)).length;
+  const purificationRate = Math.min(100, Math.floor((masteredCount / TOTAL_ENEMIES) * 100));
 
   const equippedVFX = VIRTUAL_GACHA_POOL.find(i => i.id === playerData.equipped?.vfx) || null;
   const equippedSkin = VIRTUAL_GACHA_POOL.find(i => i.id === playerData.equipped?.skin) || null;
@@ -93,35 +184,103 @@ export default function App() {
 
   const getActiveSet = () => {
     if (!equippedVFX || !equippedSkin || !equippedChip) return null;
-    if (equippedVFX.set && equippedVFX.set === equippedSkin.set && equippedSkin.set === equippedChip.set) {
-      return SET_BONUSES[equippedVFX.set] || null;
+    if (equippedVFX.set && equippedVFX.set === equippedSkin.set && equippedSkin.set === equippedChip.set && SET_BONUSES[equippedVFX.set]) {
+      return { key: equippedVFX.set, ...SET_BONUSES[equippedVFX.set] };
     }
     return null;
   };
   const activeSetBonus = getActiveSet();
 
+  const getReadingTimeLimit = () => {
+    let limit = 120;
+    if (equippedChip?.id === 'chip_cyber') limit += 20;
+    if (equippedChip?.id === 'chip_n_forget') limit += 3;
+    if (equippedVFX?.id === 'vfx_sakura') limit += 1;
+    if (activeSetBonus?.key === 'cyber') limit += 2;
+    if (activeSetBonus?.key === 'mythic') limit += 10;
+    return limit;
+  };
+
   const getUnmastered = (pool, count) => {
-    let unmastered = pool.filter(q => (masteryObj[q.id] || 0) < 3);
+    const tierFiltered = difficultyTier === 'all'
+      ? pool
+      : pool.filter(q => getQuestionTier(q.id) === Number(difficultyTier));
+    const primaryPool = tierFiltered.length > 0 ? tierFiltered : pool;
+
+    let unmastered = primaryPool.filter(q => (masteryObj[q.id] || 0) < 3);
     unmastered = shuffle(unmastered);
     if (unmastered.length < count) {
-      const mastered = shuffle(pool.filter(q => (masteryObj[q.id] || 0) >= 3));
+      const mastered = shuffle(primaryPool.filter(q => (masteryObj[q.id] || 0) >= 3));
       unmastered = [...unmastered, ...mastered.slice(0, count - unmastered.length)];
+    }
+    if (unmastered.length < count && primaryPool !== pool) {
+      const chosenIds = new Set(unmastered.map(x => x.id));
+      const fallback = shuffle(pool.filter(q => !chosenIds.has(q.id)));
+      unmastered = [...unmastered, ...fallback.slice(0, count - unmastered.length)];
     }
     return unmastered.slice(0, count);
   };
 
   const loadEncounter = (encounter) => {
     if (!encounter) return;
-    const baseTime = 60 + (equippedChip?.id === 'chip_cyber' ? 10 : 0);
+    clearAnswerTimer();
+    setShowTranslationHint(false);
+    setPeekVocabWord(null);
+    const baseTime = getReadingTimeLimit();
     let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
     if (encounter.type === 'mcq') {
       uiState.data = encounter.data;
     }
     if (encounter.type === 'vocab') {
-      let options = [encounter.data.answers[0]];
-      let wrongPool = shuffle(VOCAB_DATA.filter(v => v.id !== encounter.data.id)).map(v => v.answers[0]);
-      options = shuffle([...options, ...wrongPool.slice(0, 3)]);
-      uiState.data = { ...encounter.data, options };
+      const hasKanji = encounter.data.ch.includes('[');
+      const usedWords = new Set([encounter.data.ch]);
+      if (!hasKanji) {
+        // Pure-kana words test Chinese meaning so the answer isn't identical to the question
+        const usedUsages = new Set([encounter.data.usage]);
+        const wrongUsages = [];
+        for (const v of shuffle(VOCAB_DATA)) {
+          if (v.id !== encounter.data.id && !usedWords.has(v.ch) && v.usage && !usedUsages.has(v.usage)) {
+            usedWords.add(v.ch);
+            usedUsages.add(v.usage);
+            wrongUsages.push(v.usage);
+            if (wrongUsages.length >= 3) break;
+          }
+        }
+        uiState.data = {
+          ...encounter.data,
+          vocabMode: 'meaning',
+          options: shuffle([encounter.data.usage, ...wrongUsages])
+        };
+      } else {
+        const usedReadings = new Set([encounter.data.answers[0]]);
+        const wrongReadings = [];
+        for (const v of shuffle(VOCAB_DATA)) {
+          const ans = v.answers?.[0];
+          if (v.id !== encounter.data.id && !usedWords.has(v.ch) && ans && !usedReadings.has(ans)) {
+            usedWords.add(v.ch);
+            usedReadings.add(ans);
+            wrongReadings.push(ans);
+            if (wrongReadings.length >= 3) break;
+          }
+        }
+        uiState.data = {
+          ...encounter.data,
+          vocabMode: 'reading',
+          options: shuffle([encounter.data.answers[0], ...wrongReadings])
+        };
+      }
+    }
+    if (encounter.type === 'potion') {
+      const indexedOptions = encounter.data.options.map((opt, idx) => ({
+        opt,
+        isCorrect: idx === encounter.data.correct
+      }));
+      const shuffledOptions = shuffle(indexedOptions);
+      uiState.data = {
+        ...encounter.data,
+        options: shuffledOptions.map(item => item.opt),
+        correct: shuffledOptions.findIndex(item => item.isCorrect)
+      };
     }
     if (encounter.type === 'sort') {
       uiState.slots = [null, null, null, null];
@@ -130,70 +289,253 @@ export default function App() {
     setCombatUI(uiState);
   };
 
-  const startWaveRun = () => {
+  const buildMistakesQueue = () => {
+    const mistakes = playerData.mistakes || [];
+    const queue = [];
+    const seen = new Set();
+    mistakes.forEach((m) => {
+      let item = null;
+      let type = m.type || null;
+
+      if (m.id) {
+        if (VOCAB_IDS.has(m.id)) { type = 'vocab'; item = VOCAB_DATA.find(x => x.id === m.id); }
+        else if (SORT_IDS.has(m.id)) { type = 'sort'; item = GRAMMAR_SORT_DATA.find(x => x.id === m.id); }
+        else if (TYPE_IDS.has(m.id)) { type = 'type'; item = GRAMMAR_TYPE_DATA.find(x => x.id === m.id); }
+        else if (MCQ_IDS.has(m.id)) { type = 'mcq'; item = GRAMMAR_MCQ_DATA.find(x => x.id === m.id); }
+        else if (READING_IDS.has(m.id)) { type = 'reading'; item = READING_DATA.find(x => x.id === m.id); }
+      }
+
+      if (!item && m.q) {
+        const vMatch = VOCAB_DATA.find(x => x.ch === m.q);
+        const gsMatch = GRAMMAR_SORT_DATA.find(x => x.context === m.q);
+        const gtMatch = GRAMMAR_TYPE_DATA.find(x => x.prompt === m.q);
+        const gmMatch = GRAMMAR_MCQ_DATA.find(x => x.question === m.q);
+        const rMatch = READING_DATA.find(x => x.questions?.some(rq => rq.q === m.q));
+        if (vMatch) { type = 'vocab'; item = vMatch; }
+        else if (gsMatch) { type = 'sort'; item = gsMatch; }
+        else if (gtMatch) { type = 'type'; item = gtMatch; }
+        else if (gmMatch) { type = 'mcq'; item = gmMatch; }
+        else if (rMatch) { type = 'reading'; item = rMatch; }
+      }
+
+      if (item && type && !seen.has(item.id)) {
+        seen.add(item.id);
+        queue.push({ wave: type === 'reading' ? 3 : (type === 'vocab' ? 1 : 2), type, data: item });
+      }
+    });
+    return shuffle(queue).slice(0, 10).sort((a, b) => a.wave - b.wave);
+  };
+
+  const startWaveRun = (modeOverride = null) => {
     sfx.init();
-    const w1Vocab = getUnmastered(VOCAB_DATA, 4).map(q => ({ wave: 1, type: 'vocab', data: q }));
-    const potionQ = Math.random() > 0.4 ? getUnmastered(POTION_DATA, 1).map(q => ({ wave: 1, type: 'potion', data: q })) : [];
-    const w2Sort = getUnmastered(GRAMMAR_SORT_DATA, 2).map(q => ({ wave: 2, type: 'sort', data: q }));
-    const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 1).map(q => ({ wave: 2, type: 'type', data: q }));
-    const w2Mcq = getUnmastered(GRAMMAR_MCQ_DATA, 2).map(q => ({ wave: 2, type: 'mcq', data: q }));
-    const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
-    const fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w2Mcq, ...w3Reading];
+    const targetMode = typeof modeOverride === 'string' ? modeOverride : practiceMode;
+    let fullQueue;
+
+    if (targetMode === 'mistakes') {
+      fullQueue = buildMistakesQueue();
+      if (fullQueue.length === 0) {
+        if (screen === 'battle') {
+          setScreen('menu');
+          return showToast("🎉 所有錯題皆已攻克完畢！", "success");
+        }
+        return showToast("目前沒有可複習的錯題！", "info");
+      }
+    } else if (targetMode === 'vocab') {
+      fullQueue = getUnmastered(VOCAB_DATA, 6).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'vocab', data: q }));
+    } else if (targetMode === 'sort') {
+      fullQueue = getUnmastered(GRAMMAR_SORT_DATA, 5).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'sort', data: q }));
+    } else if (targetMode === 'type') {
+      fullQueue = getUnmastered(GRAMMAR_TYPE_DATA, 5).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'type', data: q }));
+    } else if (targetMode === 'mcq') {
+      fullQueue = getUnmastered(GRAMMAR_MCQ_DATA, 6).map((q, idx) => ({ wave: idx < 2 ? 1 : (idx < 4 ? 2 : 3), type: 'mcq', data: q }));
+    } else if (targetMode === 'reading') {
+      fullQueue = getUnmastered(READING_DATA, 2).map(q => ({ wave: 3, type: 'reading', data: q }));
+    } else {
+      const w1Vocab = getUnmastered(VOCAB_DATA, 4).map(q => ({ wave: 1, type: 'vocab', data: q }));
+      const potionQ = Math.random() > 0.4 ? getUnmastered(POTION_DATA, 1).map(q => ({ wave: 1, type: 'potion', data: q })) : [];
+      const w2Sort = getUnmastered(GRAMMAR_SORT_DATA, 2).map(q => ({ wave: 2, type: 'sort', data: q }));
+      const w2Type = getUnmastered(GRAMMAR_TYPE_DATA, 1).map(q => ({ wave: 2, type: 'type', data: q }));
+      const w2Mcq = getUnmastered(GRAMMAR_MCQ_DATA, 2).map(q => ({ wave: 2, type: 'mcq', data: q }));
+      const w3Reading = getUnmastered(READING_DATA, 1).map(q => ({ wave: 3, type: 'reading', data: q }));
+      fullQueue = [...w1Vocab, ...potionQ, ...w2Sort, ...w2Type, ...w2Mcq, ...w3Reading];
+    }
 
     if (fullQueue.length === 0) return showToast("題庫為空或載入失敗！", "error");
 
+    clearAnswerTimer();
+    runStatsRef.current = {
+      responseTimes: [],
+      flashCount: 0,
+      correctCount: 0,
+      totalAnswered: 0,
+      levelUps: [],
+      nemesisSlain: [],
+      bonusGold: 0
+    };
+    setBattleReport(null);
     setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
     setCombo(0);
-    setWaveState({ isActive: true, currentWave: 1, queue: fullQueue, currentIndex: 0, shieldUsed: false });
+    setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: targetMode });
     setIsPaused(false);
     loadEncounter(fullQueue[0]);
     setScreen('battle');
   };
 
-
   useEffect(() => {
-    if (!callsign || !db) return;
-    setIsLoading(true);
-    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
-    const unsubscribe = onSnapshot(docRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setPlayerData({
-          ...data,
-          critRate: data.critRate || 0.1,
-          lastLoginDate: data.lastLoginDate || '',
-          mastery: data.mastery || {}
-        });
+    if (!account?.key || !isAuthResolved) return;
+
+    // Load local backup immediately to avoid blocking
+    try {
+      const localRaw = localStorage.getItem(`neon_game_save_${account.key}`);
+      if (localRaw) {
+        const localData = JSON.parse(localRaw);
+        const mergedLocal = {
+          ...playerDataRef.current,
+          ...localData,
+          critRate: localData.critRate || 0.1,
+          lastLoginDate: localData.lastLoginDate || '',
+          mastery: localData.mastery || {},
+          claimedMilestones: localData.claimedMilestones || [],
+          bestAvgSpeed: localData.bestAvgSpeed || 0,
+          lastAvgSpeed: localData.lastAvgSpeed || 0,
+          nemesisSlainCount: localData.nemesisSlainCount || 0,
+          mistakeCounts: localData.mistakeCounts || {}
+        };
+        playerDataRef.current = mergedLocal;
+        setPlayerData(mergedLocal);
       }
+    } catch { /* ignore localStorage parse errors */ }
+
+    if (!db || !user) {
       setIsLoading(false);
-    });
-    return () => unsubscribe();
-  }, [callsign]);
+      return;
+    }
+
+    setIsLoading(true);
+    const safetyTimer = setTimeout(() => setIsLoading(false), 4000);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${account.key}`);
+    const unsubscribe = onSnapshot(
+      docRef,
+      (snapshot) => {
+        clearTimeout(safetyTimer);
+        if (snapshot.metadata.hasPendingWrites) {
+          setIsLoading(false);
+          return;
+        }
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          const currentLocal = playerDataRef.current;
+          const isLocalNewer = (currentLocal.updatedAt || 0) > (data.updatedAt || 0);
+          const mergedMastery = { ...(data.mastery || {}), ...(currentLocal.mastery || {}) };
+          Object.keys(mergedMastery).forEach((k) => {
+            mergedMastery[k] = Math.max(data.mastery?.[k] || 0, currentLocal.mastery?.[k] || 0);
+          });
+          const mergedClaimed = Array.from(new Set([
+            ...(data.claimedMilestones || []),
+            ...(currentLocal.claimedMilestones || [])
+          ]));
+          const base = isLocalNewer ? { ...data, ...currentLocal } : { ...currentLocal, ...data };
+          const merged = {
+            ...base,
+            critRate: base.critRate || 0.1,
+            lastLoginDate: base.lastLoginDate || '',
+            mastery: mergedMastery,
+            claimedMilestones: mergedClaimed,
+            bestAvgSpeed: base.bestAvgSpeed || 0,
+            lastAvgSpeed: base.lastAvgSpeed || 0,
+            nemesisSlainCount: Math.max(data.nemesisSlainCount || 0, currentLocal.nemesisSlainCount || 0),
+            mistakeCounts: base.mistakeCounts || {}
+          };
+          playerDataRef.current = merged;
+          setPlayerData(merged);
+          try {
+            localStorage.setItem(`neon_game_save_${account.key}`, JSON.stringify(merged));
+          } catch { /* ignore storage errors */ }
+        }
+        setIsLoading(false);
+      },
+      (err) => {
+        clearTimeout(safetyTimer);
+        console.error("Firestore Snapshot Error:", err);
+        setIsLoading(false);
+      }
+    );
+    return () => {
+      clearTimeout(safetyTimer);
+      unsubscribe();
+    };
+  }, [account?.key, isAuthResolved, user]);
+
+  const saveGame = async (newData) => {
+    const stampedData = {
+      ...newData,
+      ...(account ? { accountMode: account.mode, accountValue: account.value } : {}),
+      updatedAt: Date.now()
+    };
+    playerDataRef.current = stampedData;
+    setPlayerData(stampedData);
+    if (account?.key) {
+      try {
+        localStorage.setItem(`neon_game_save_${account.key}`, JSON.stringify(stampedData));
+      } catch { /* ignore storage errors */ }
+    }
+    if (account?.key && db && user) {
+      try {
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${account.key}`), stampedData, { merge: true });
+      } catch (err) {
+        console.error("Cloud save failed, kept in localStorage:", err);
+      }
+    }
+  };
 
   useEffect(() => {
-    if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused) {
+    if (relaxedMode) return;
+    if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft > 0 && !feedback.show && !isPaused && !isAnswering) {
       const timer = setTimeout(() => setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 })), 1000);
       return () => clearTimeout(timer);
-    } else if (combatUI.timeLeft === 0 && !feedback.show && !isPaused && screen === 'battle') {
-      let dmg = Math.floor((playerData.maxHp || 100) * 0.5);
+    } else if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft === 0 && !feedback.show && !isPaused && !isAnswering) {
+      let dmg = Math.floor((playerData.maxHp || 100) * 0.3);
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
-        dmg = (playerData.hp || 100) - 1;
+        dmg = Math.max(0, (playerData.hp || 100) - 1);
         showToast("🛡️ 量子鎖血晶片生效！強制保留 1 HP！", "success");
       }
 
       sfx.playError();
-      setPlayerData(prev => ({ ...prev, hp: Math.max(0, (prev.hp || 100) - dmg) }));
       triggerScreenShake();
       setCombo(0);
-      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！', correct: '時間耗盡', example: '請加快閱讀理解與作答反應速度。', exampleZh: '' });
-      setCombatUI(prev => ({ ...prev, timeLeft: 60 }));
+
+      const pData = { ...playerDataRef.current };
+      pData.hp = Math.max(0, (pData.hp || 100) - dmg);
+      if (combatUI.data) {
+        pData.mastery = { ...(pData.mastery || {}), [combatUI.data.id]: 0 };
+        const qData = combatUI.data.questions?.[combatUI.readingStep];
+        if (qData) {
+          const mistakeEntry = {
+            id: combatUI.data.id,
+            type: 'reading',
+            q: qData.q,
+            a: qData.options[qData.correct],
+            exp: qData.explanation,
+            example: '【文章翻譯】',
+            exampleZh: combatUI.data.translation
+          };
+          const filteredMistakes = (pData.mistakes || []).filter(
+            m => !((mistakeEntry.id && m.id === mistakeEntry.id) || m.q === mistakeEntry.q)
+          );
+          pData.mistakes = [mistakeEntry, ...filteredMistakes].slice(0, 100);
+        }
+      }
+      saveGame(pData);
+
+      const resetTime = getReadingTimeLimit();
+      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！可切換「休閒學習模式」關閉時間限制。', correct: '時間耗盡', example: '請加快閱讀理解或利用暫停鍵思考文章內容。', exampleZh: '' });
+      setCombatUI(prev => ({ ...prev, timeLeft: resetTime }));
     }
-  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused]);
+  }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, isAnswering, relaxedMode]);
 
   const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
-  const saveGame = async (newData) => { setPlayerData(newData); if (callsign && db) await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), newData, { merge: true }); };
   useEffect(() => {
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
@@ -202,73 +544,258 @@ export default function App() {
     }
   }, [secretClicks]);
 
-
-
   useEffect(() => {
-    if (!auth) { setIsLoading(false); return; }
+    if (!auth) {
+      setIsAuthResolved(true);
+      setIsLoading(false);
+      return;
+    }
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
-      } catch (err) { print("Auth Error", err); }
+      } catch (err) {
+        console.error("Auth Error", err);
+      } finally {
+        setIsAuthResolved(true);
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthResolved(true);
+    });
     return () => unsubscribe();
   }, []);
-  const handleLoginSuccess = (enteredCallsign) => {
-    setCallsign(enteredCallsign);
+  const handleLoginSuccess = (enteredAccount) => {
+    const freshDefault = createDefaultPlayerData();
+    playerDataRef.current = freshDefault;
+    setPlayerData(freshDefault);
+    setAccount(enteredAccount);
     setScreen('menu');
   };
 
-  const handleNext = (newHp) => {
+  const handleLogout = () => {
+    clearAnswerTimer();
+    tts.stop();
+    const freshDefault = createDefaultPlayerData();
+    playerDataRef.current = freshDefault;
+    setPlayerData(freshDefault);
+    setBattleReport(null);
+    setAccount(null);
+    setScreen('login');
+  };
+
+  const handleNext = (newHp, requeuedCurrent = false) => {
     if (newHp <= 0) {
       showToast("系統崩潰... 返回主終端機。", "error");
-      saveGame({ ...playerData, hp: playerData.maxHp || 100 });
+      saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
+      tts.stop();
       setScreen('menu'); return;
     }
+    const effectiveQueue = requeuedCurrent && waveState.queue[waveState.currentIndex]
+      ? [...waveState.queue, waveState.queue[waveState.currentIndex]]
+      : waveState.queue;
+
     const nextIndex = waveState.currentIndex + 1;
-    if (nextIndex >= waveState.queue.length) {
-      let earnedGold = 500;
-      if (equippedSkin?.buff?.includes('金幣')) earnedGold += 100;
-      if (activeSetBonus && activeSetBonus.name.includes('櫻華')) earnedGold = Math.floor(earnedGold * 1.4);
+    if (nextIndex >= effectiveQueue.length) {
+      const baseGold = waveState.mode === 'mixed' ? 500 : (waveState.mode === 'reading' ? 300 : 250);
+      let earnedGold = baseGold;
+      if (equippedSkin?.id === 'skin_sakura') earnedGold = Math.floor(earnedGold * 1.2);
+      else if (equippedSkin?.id === 'skin_r1') earnedGold = Math.floor(earnedGold * 1.1);
+      if (equippedSkin?.id === 'skin_r_conbini') earnedGold += 60;
+      if (equippedSkin?.id === 'skin_ur1') earnedGold += 100;
+      if (activeSetBonus?.key === 'sakura') earnedGold = Math.floor(earnedGold * 1.4);
+      if (activeSetBonus?.key === 'mythic') earnedGold = Math.floor(earnedGold * 1.5);
+      if (activeSetBonus?.key === 'shachiku') earnedGold += 120;
+      if (activeSetBonus?.key === 'chuuni') earnedGold += 100;
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
 
-      showToast(`🎉 區域肅清！獲得 ${earnedGold} G 學習津貼！`, "success");
-      saveGame({ ...playerData, hp: playerData.maxHp || 100, gold: (playerData.gold || 0) + earnedGold, bossKills: (playerData.bossKills || 0) + 1 });
+      const latest = playerDataRef.current;
+      const stats = runStatsRef.current;
+      const avgSpeed = stats.responseTimes.length > 0
+        ? stats.responseTimes.reduce((s, v) => s + v, 0) / stats.responseTimes.length
+        : 0;
+      const prevBest = latest.bestAvgSpeed || 0;
+      const isNewBestSpeed = avgSpeed > 0 && (prevBest === 0 || avgSpeed < prevBest);
+      const nextBestSpeed = isNewBestSpeed ? avgSpeed : prevBest;
+
+      const updatedData = {
+        ...latest,
+        hp: latest.maxHp || 100,
+        gold: (latest.gold || 0) + earnedGold,
+        bossKills: (latest.bossKills || 0) + 1,
+        lastAvgSpeed: avgSpeed > 0 ? Number(avgSpeed.toFixed(2)) : (latest.lastAvgSpeed || 0),
+        bestAvgSpeed: nextBestSpeed > 0 ? Number(nextBestSpeed.toFixed(2)) : 0
+      };
+      saveGame(updatedData);
+
+      setBattleReport({
+        avgSpeed,
+        prevAvgSpeed: latest.lastAvgSpeed || 0,
+        isNewBestSpeed,
+        flashCount: stats.flashCount,
+        correctCount: stats.correctCount,
+        totalAnswered: stats.totalAnswered,
+        levelUps: stats.levelUps,
+        nemesisSlain: stats.nemesisSlain,
+        earnedGold: earnedGold + stats.bonusGold,
+        bonusGold: stats.bonusGold,
+        rankInfo: computeSkillProfile(updatedData)
+      });
+
+      tts.stop();
       setScreen('menu');
     } else {
-      const nextEncounter = waveState.queue[nextIndex];
-      let currentHp = newHp;
-      if (activeSetBonus && activeSetBonus.name.includes('量子駭客')) {
-        currentHp = Math.min(playerData.maxHp || 100, currentHp + 10);
+      const nextEncounter = effectiveQueue[nextIndex];
+      if (nextEncounter.wave > waveState.currentWave) {
+        let waveHeal = 0;
+        if (activeSetBonus?.key === 'cyber') waveHeal += 10;
+        if (equippedChip?.id === 'chip_nomihodai') waveHeal += 8;
+        if (waveHeal > 0) {
+          const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + waveHeal);
+          if (healedHp !== newHp) {
+            saveGame({ ...playerDataRef.current, hp: healedHp });
+          }
+        }
       }
-      setWaveState(prev => ({ ...prev, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
+      setWaveState(prev => ({ ...prev, queue: effectiveQueue, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
       loadEncounter(nextEncounter);
     }
   };
 
+  const getEncounterLabel = (type, data) => {
+    if (!data) return '';
+    if (type === 'vocab') return data.ch;
+    if (type === 'sort') return `${data.context} ${data.example || ''}`.trim();
+    if (type === 'type') return `${data.base} → ${data.correct}`;
+    if (type === 'mcq') return data.options?.[data.correct] || data.question;
+    if (type === 'reading') return `${(data.text || '').slice(0, 22)}…`;
+    return '';
+  };
+
   const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
-    if (isPaused) return;
-    let pData = { ...playerData };
-    
+    if (isPaused || isAnsweringRef.current) return;
+    isAnsweringRef.current = true;
+    setIsAnswering(true);
+    let pData = {
+      ...playerDataRef.current,
+      mastery: { ...(playerDataRef.current.mastery || {}) },
+      mistakeCounts: { ...(playerDataRef.current.mistakeCounts || {}) }
+    };
+
+    const responseSec = combatUI.startTime ? Math.max(0.2, (Date.now() - combatUI.startTime) / 1000) : 5.0;
+    if (combatUI.type !== 'potion') {
+      runStatsRef.current.totalAnswered += 1;
+      runStatsRef.current.responseTimes.push(Math.min(60, responseSec));
+    }
+
     if (isCorrect) {
       sfx.playHit();
       const newCombo = combatUI.type === 'potion' ? combo : combo + 1;
       if (combatUI.type !== 'potion') setCombo(newCombo);
 
+      const isFlashRead = combatUI.type !== 'potion' && responseSec <= getFlashThreshold(combatUI.type);
       const comboBonus = 1 + Math.min(newCombo * 0.05, 0.4);
-      let isCrit = Math.random() * 100 < (pData.critRate || 0.1);
-      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
-      if (isCrit) dmg = Math.floor(dmg * 2.0);
+      let effectiveCrit = pData.critRate || 0.1;
+      if (equippedVFX?.id === 'vfx_r1') effectiveCrit += 5;
+      if (equippedChip?.id === 'chip_deadline' && (pData.hp || 100) < (pData.maxHp || 100) * 0.5) effectiveCrit += 35;
+      if (activeSetBonus?.key === 'chuuni') effectiveCrit += 25;
+      let isCrit = isFlashRead || Math.random() * 100 < effectiveCrit;
 
+      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
+      if (isFlashRead) dmg = Math.floor(dmg * 1.2);
+      if (equippedChip?.id === 'chip_ramen') dmg = Math.floor(dmg * 1.4);
+      else if (equippedChip?.id === 'chip_r_anime') dmg = Math.floor(dmg * 1.15);
+      if (equippedVFX?.id === 'vfx_coffee' && newCombo >= 2) dmg = Math.floor(dmg * 1.25);
+      if (equippedVFX?.id === 'vfx_chuuni' && (combatUI.type === 'type' || combatUI.type === 'sort')) dmg = Math.floor(dmg * 1.3);
+      if (equippedVFX?.id === 'vfx_n_mos') dmg += 2;
+      if (isCrit) dmg = Math.floor(dmg * (equippedSkin?.id === 'skin_neko' ? 2.6 : 2.0));
+
+      if (combatUI.type === 'potion' && equippedVFX?.id === 'vfx_highball') {
+        heal = Math.floor(heal * 1.5);
+      }
       if (equippedChip?.id === 'chip_sakura') {
         heal += 5;
       }
+      if (equippedChip?.id === 'chip_ramen' && combatUI.type !== 'potion' && newCombo > 0 && newCombo % 3 === 0) {
+        heal += 10;
+      }
+      if (combatUI.type !== 'potion' && activeSetBonus?.key === 'mythic') {
+        heal += 3;
+      }
       pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
 
+      // Apply equipment combat gold buffs & flash/nemesis tracking
+      if (combatUI.type !== 'potion') {
+        runStatsRef.current.correctCount += 1;
+        if (isFlashRead) {
+          runStatsRef.current.flashCount += 1;
+          runStatsRef.current.bonusGold += 5;
+          pData.gold = (pData.gold || 0) + 5;
+          showToast(`⚡ 神速直覺 (${responseSec.toFixed(1)}s)！+5 G`, "success");
+        }
+        if (waveState.currentIndex === 0 && !waveState.firstBonusUsed && equippedSkin?.id === 'skin_cyber') {
+          pData.gold = (pData.gold || 0) + 50;
+          setWaveState(prev => ({ ...prev, firstBonusUsed: true }));
+        }
+        if (newCombo >= 3 && equippedVFX?.id === 'vfx_cyber') {
+          pData.gold = (pData.gold || 0) + 15;
+        }
+        if (equippedSkin?.id === 'skin_train') {
+          pData.gold = (pData.gold || 0) + 12;
+        }
+        if (equippedSkin?.id === 'skin_takoyaki' && combatUI.type === 'reading') {
+          pData.gold = (pData.gold || 0) + 20;
+        }
+        if (equippedVFX?.id === 'vfx_r_pencil' && combatUI.type === 'mcq') {
+          pData.gold = (pData.gold || 0) + 8;
+        }
+        if (equippedSkin?.id === 'skin_r_shiba' && combatUI.type === 'vocab') {
+          pData.gold = (pData.gold || 0) + 6;
+        }
+        if (equippedChip?.id === 'chip_n_wa_ga') {
+          pData.gold = (pData.gold || 0) + 2;
+        }
+        if (activeSetBonus?.key === 'izakaya') {
+          pData.gold = (pData.gold || 0) + 10;
+        }
+      }
+
       if (combatUI.type !== 'potion' && combatUI.data) {
-        pData.mastery[combatUI.data.id] = (pData.mastery[combatUI.data.id] || 0) + 1;
+        const qId = combatUI.data.id;
+        const prevLv = pData.mastery[qId] || 0;
+        const nextLv = prevLv + 1;
+        pData.mastery[qId] = nextLv;
         pData.vocabKills = (pData.vocabKills || 0) + 1;
+
+        const qLabel = getEncounterLabel(combatUI.type, combatUI.data);
+        if (prevLv < 3) {
+          runStatsRef.current.levelUps.push({ id: qId, label: qLabel, fromLv: prevLv, toLv: Math.min(3, nextLv) });
+          if (nextLv === 3) {
+            showToast(`👑 完全掌握解鎖！此題已達 Lv.3 直覺反射`, "success");
+          }
+        }
+
+        // Nemesis check & defeat
+        const prevFails = pData.mistakeCounts[qId] || 0;
+        if (prevFails >= 2) {
+          pData.mistakeCounts[qId] = 0;
+          pData.nemesisSlainCount = (pData.nemesisSlainCount || 0) + 1;
+          pData.gold = (pData.gold || 0) + 30;
+          runStatsRef.current.bonusGold += 30;
+          runStatsRef.current.nemesisSlain.push({ id: qId, label: qLabel });
+          showToast("⚔️ 宿敵討伐成功！獲得雙倍突破獎金 +30 G！", "success");
+        } else if (prevFails > 0) {
+          pData.mistakeCounts[qId] = 0;
+        }
+
+        if (waveState.mode === 'mistakes') {
+          const prevLen = (pData.mistakes || []).length;
+          pData.mistakes = (pData.mistakes || []).filter(m => m.id !== qId && m.q !== mistakeInfo?.q);
+          if (pData.mistakes.length < prevLen && prevFails < 2) {
+            showToast("✅ 已攻克錯題！自動移出錯誤日誌", "success");
+          }
+        }
       }
 
       if (combatUI.type === 'potion') {
@@ -284,21 +811,39 @@ export default function App() {
       }
       saveGame(pData);
       if (mistakeInfo) {
-        setTimeout(() => {
+        answerTimerRef.current = setTimeout(() => {
+          answerTimerRef.current = null;
+          isAnsweringRef.current = false;
+          setIsAnswering(false);
           setFeedback({ show: true, isWrong: false, damageTaken: 0, text: mistakeInfo.exp || '', correct: mistakeInfo.a || '', example: mistakeInfo.example || '', exampleZh: mistakeInfo.exampleZh || '' });
         }, 800);
       } else {
-        setTimeout(() => handleNext(pData.hp), 800);
+        answerTimerRef.current = setTimeout(() => {
+          answerTimerRef.current = null;
+          handleNext(pData.hp);
+        }, 800);
       }
     } else {
       sfx.playError();
       setCombo(0);
       triggerScreenShake();
 
-      let dmgTaken = combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2));
+      let dmgTaken = relaxedMode
+        ? 5
+        : (combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2)));
 
-      if (activeSetBonus && activeSetBonus.name.includes('櫻華')) {
+      if (activeSetBonus?.key === 'sakura') {
         dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.8));
+      }
+      if (activeSetBonus?.key === 'shachiku') {
+        dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.75));
+      }
+      if (equippedChip?.id === 'chip_r_keigo') {
+        dmgTaken = Math.max(1, dmgTaken - 3);
+      }
+      if (activeSetBonus?.key === 'izakaya' && Math.random() < 0.25) {
+        dmgTaken = 0;
+        showToast("🍻 醉拳閃避發動！完美躲過扣血！", "success");
       }
 
       if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((pData.hp || 100) - dmgTaken <= 0)) {
@@ -308,52 +853,119 @@ export default function App() {
       }
 
       pData.hp = Math.max(0, (pData.hp || 100) - dmgTaken);
-      if (combatUI.type !== 'potion' && combatUI.data) pData.mastery[combatUI.data.id] = 0;
-      if (mistakeInfo) {
-        const currentMistakes = pData.mistakes || [];
-        if (!currentMistakes.find(m => m.q === mistakeInfo.q)) pData.mistakes = [mistakeInfo, ...currentMistakes].slice(0, 30);
+      if (combatUI.type !== 'potion' && combatUI.data) {
+        const qId = combatUI.data.id;
+        pData.mastery[qId] = 0;
+        const nextFails = (pData.mistakeCounts[qId] || 0) + 1;
+        pData.mistakeCounts[qId] = nextFails;
+        if (nextFails === 2) {
+          showToast("🔴 此題已列為「宿敵弱點」！擊破後可獲雙倍獎勵", "info");
+        }
+      }
+      if (mistakeInfo && combatUI.type !== 'potion') {
+        const entry = { id: combatUI.data?.id, type: combatUI.type, ...mistakeInfo };
+        const filteredMistakes = (pData.mistakes || []).filter(
+          m => !((entry.id && m.id === entry.id) || m.q === entry.q)
+        );
+        pData.mistakes = [entry, ...filteredMistakes].slice(0, 100);
       }
       saveGame(pData);
+      isAnsweringRef.current = false;
+      setIsAnswering(false);
       setFeedback({ show: true, isWrong: true, damageTaken: dmgTaken, text: mistakeInfo?.exp || '指令錯誤', correct: mistakeInfo?.a || '', example: mistakeInfo?.example || '', exampleZh: mistakeInfo?.exampleZh || '' });
     }
   };
 
   const handleAcknowledgeFeedback = () => {
+    tts.stop();
     const wasWrong = feedback.isWrong;
+    const shouldRequeue = wasWrong && combatUI.type !== 'potion';
     setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    if (wasWrong && combatUI.type !== 'potion') {
-      setWaveState(prev => {
-        const currentEncounter = prev.queue[prev.currentIndex];
-        return { ...prev, queue: [...prev.queue, currentEncounter] };
-      });
-    }
-    handleNext(playerData.hp);
+    handleNext(playerDataRef.current.hp, shouldRequeue);
   };
 
-  const handleVocabClick = (opt) => { if(!combatUI.data) return; processAnswer(opt === combatUI.data.answers[0], 1, 0, { q: combatUI.data.ch, a: combatUI.data.answers[0], exp: combatUI.data.usage, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handleVocabClick = (opt) => {
+    if (!combatUI.data) return;
+    const isMeaningMode = combatUI.data.vocabMode === 'meaning';
+    const expected = isMeaningMode ? combatUI.data.usage : combatUI.data.answers[0];
+    const correctDisplay = isMeaningMode ? `${combatUI.data.answers[0]}（${combatUI.data.usage}）` : combatUI.data.answers[0];
+    processAnswer(opt === expected, 1, 0, {
+      q: combatUI.data.ch,
+      a: correctDisplay,
+      exp: combatUI.data.usage,
+      example: combatUI.data.example,
+      exampleZh: combatUI.data.exampleZh
+    });
+  };
   const handleSortClick = (word, isAvailable, index) => {
-    if(!combatUI.data) return;
+    if (!combatUI.data || isAnsweringRef.current) return;
     let newSlots = [...combatUI.slots], newAvailable = [...combatUI.data.available];
     if (isAvailable) {
       const emptyIdx = newSlots.findIndex(s => s === null); if (emptyIdx === -1) return;
       newSlots[emptyIdx] = word; newAvailable[index] = null;
-    } else { newSlots[index] = null; newAvailable[newAvailable.findIndex(s => s === null)] = word; }
+    } else {
+      if (!newSlots[index]) return;
+      newSlots[index] = null; newAvailable[newAvailable.findIndex(s => s === null)] = word;
+    }
     setCombatUI(prev => ({ ...prev, slots: newSlots, data: { ...prev.data, available: newAvailable } }));
     if (newSlots.filter(s => s !== null).length === 4) {
-      const correctSentence = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join('');
-      const correctSentenceDisplay = combatUI.data.correctOrder.map(idx => combatUI.data.parts[idx]).join(' ');
-      processAnswer(newSlots.join('') === correctSentence, 2, 0, { q: combatUI.data.context, a: correctSentenceDisplay, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+      const validOrders = [combatUI.data.correctOrder, ...(combatUI.data.acceptedOrders || [])];
+      const userSentence = newSlots.join('');
+      const matchedOrder = validOrders.find(order => order.map(idx => combatUI.data.parts[idx]).join('') === userSentence);
+      const displayOrder = matchedOrder || combatUI.data.correctOrder;
+      const correctSentence = displayOrder.map(idx => combatUI.data.parts[idx]).join('');
+      const correctSentenceDisplay = displayOrder.map(idx => combatUI.data.parts[idx]).join(' ');
+      const fullSentence = combatUI.data.context.includes('／')
+        ? combatUI.data.context.replace('／', correctSentence)
+        : `${combatUI.data.context}${correctSentence}`;
+      const grammarNote = combatUI.data.example || '';
+      const fullExp = grammarNote
+        ? `${grammarNote}\n\n【中譯】${combatUI.data.translation}`
+        : combatUI.data.translation;
+      processAnswer(Boolean(matchedOrder), 2, 0, {
+        q: combatUI.data.context,
+        a: correctSentenceDisplay,
+        exp: fullExp,
+        example: fullSentence,
+        exampleZh: combatUI.data.translation
+      });
     }
   };
-  const handleTypeSubmit = (e) => { e.preventDefault(); if(combatUI.data) processAnswer(combatUI.inputValue.trim() === combatUI.data.correct, 2, 0, { q: combatUI.data.prompt, a: combatUI.data.correct, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
-  const handlePotionClick = (idx) => { if(combatUI.data) processAnswer(idx === combatUI.data.correct, 0, 20, { q: combatUI.data.context, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh }); };
+  const handleTypeSubmit = (e) => {
+    e.preventDefault();
+    if (!combatUI.data || isAnsweringRef.current) return;
+    const userInput = combatUI.inputValue.trim().replace(/\u3000/g, ' ');
+    if (!userInput) {
+      showToast("請先輸入答案！", "info");
+      return;
+    }
+    const accepted = combatUI.data.acceptedAnswers || [combatUI.data.correct];
+    const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
+    const userHira = toHiragana(userInput);
+    const isCorrect = accepted.includes(userInput) || accepted.some(a => toHiragana(a) === userHira);
+    processAnswer(isCorrect, 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+  };
+  const handlePotionClick = (idx) => {
+    if (!combatUI.data) return;
+    const correctOpt = combatUI.data.options[combatUI.data.correct];
+    const fullSentence = combatUI.data.context.includes('___')
+      ? combatUI.data.context.replace('___', correctOpt)
+      : combatUI.data.context;
+    processAnswer(idx === combatUI.data.correct, 0, 20, {
+      q: combatUI.data.context,
+      a: correctOpt,
+      exp: combatUI.data.example || combatUI.data.translation,
+      example: fullSentence,
+      exampleZh: combatUI.data.translation
+    });
+  };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
     processAnswer(idx === combatUI.data.correct, idx === combatUI.data.correct ? 1.5 : 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
 
   const handleReadingClick = (idx) => {
-    if(!combatUI.data || !combatUI.data.questions) return;
+    if(!combatUI.data || !combatUI.data.questions || isAnsweringRef.current) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
 
     // Format option translations to prepend to the explanation
@@ -374,6 +986,7 @@ export default function App() {
 
     if (idx === qData.correct) {
       if (combatUI.readingStep < combatUI.data.questions.length - 1) {
+        sfx.playHit();
         setCombatUI(prev => ({ ...prev, readingStep: prev.readingStep + 1 }));
         triggerFx('slash');
       } else {
@@ -385,22 +998,33 @@ export default function App() {
   };
 
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
-  const handleRestartBattle = () => { setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false }); startWaveRun(); };
+  const handleRestartBattle = () => {
+    clearAnswerTimer();
+    setIsPaused(false);
+    setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
+    startWaveRun(waveState.mode);
+  };
   const handleSurrender = () => {
+    clearAnswerTimer();
     setIsPaused(false); setFeedback({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
-    saveGame({ ...playerData, hp: playerData.maxHp || 100 });
+    tts.stop();
+    saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
     showToast("已安全撤退至主終端。", "info"); setScreen('menu');
   };
 
   const handleDailyCheckIn = () => {
     sfx.init();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     if (playerData.lastLoginDate === today) return;
     let newCritRate = playerData.critRate || 0.1, message = "";
     if (!playerData.lastLoginDate) { newCritRate = 0.2; message = "系統首次連線！爆擊率 +0.1%"; }
     else {
-      const diffDays = Math.ceil(Math.abs(new Date(today) - new Date(playerData.lastLoginDate)) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; } else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
+      const [tY, tM, tD] = today.split('-').map(Number);
+      const [lY, lM, lD] = playerData.lastLoginDate.split('-').map(Number);
+      const diffDays = Math.round((new Date(tY, tM - 1, tD) - new Date(lY, lM - 1, lD)) / (1000 * 60 * 60 * 24));
+      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; }
+      else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
+      else return;
     }
     sfx.playRareChime(false);
     saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)), gold: (playerData.gold || 0) + 200 });
@@ -410,45 +1034,48 @@ export default function App() {
   // ==========================================
   // 抽獎核心運算 (含 UP 權重、保底、變色偽裝)
   // ==========================================
+  const pickWeightedItem = (items) => {
+    const totalWeight = items.reduce((sum, it) => sum + Math.max(0, Number(it.chance) || 0), 0);
+    if (totalWeight <= 0) return items[items.length - 1];
+    let rand = Math.random() * totalWeight;
+    for (const item of items) {
+      const w = Math.max(0, Number(item.chance) || 0);
+      if (rand < w) return item;
+      rand -= w;
+    }
+    return items[items.length - 1];
+  };
+
   const rollSingleItem = (poolType, currentPity, bannerTheme) => {
     if (poolType === 'real') {
-      const pool = playerData.gachaPool || DEFAULT_GACHA_POOL;
-      let randomNum = Math.random() * 100, wonItem = null;
-      for (let item of pool) {
-        if (randomNum < Number(item.chance)) { wonItem = item; break; }
-        randomNum -= Number(item.chance);
-      }
-      return { item: wonItem || pool[0], rarity: Number(wonItem?.chance || 10) <= 9 ? 'SSR' : 'N', isDuplicate: false };
+      const pool = playerDataRef.current.gachaPool || DEFAULT_GACHA_POOL;
+      const wonItem = pickWeightedItem(pool) || pool[0];
+      const chanceNum = Number(wonItem?.chance ?? 10);
+      const rarity = wonItem?.rarity || (chanceNum <= 9 ? 'SSR' : (chanceNum <= 35 ? 'R' : 'N'));
+      return { item: wonItem, rarity, isDuplicate: false };
     }
 
     const isHardPity = currentPity >= 29;
-    let ssrBoost = currentPity >= 20 ? (currentPity - 19) * 5 : 0;
-    let roll = Math.random() * 100;
+    const ssrBoost = currentPity >= 20 ? (currentPity - 19) * 5 : 0;
+    const highRarityPool = VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'UR' || i.rarity === 'SSR');
+    const lowRarityPool = VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'R' || i.rarity === 'N');
+    const baseHighRate = highRarityPool.reduce((sum, i) => sum + Number(i.chance || 0), 0); // 22% (21% SSR + 1% UR)
+    const roll = Math.random() * 100;
 
     let wonItem = null;
-    let pool = [...VIRTUAL_GACHA_POOL];
-
-    if (isHardPity || roll < (8 + ssrBoost)) {
-      const highRarityPool = pool.filter(i => i.rarity === 'UR' || i.rarity === 'SSR');
-
+    if (isHardPity || roll < (baseHighRate + ssrBoost)) {
       if (bannerTheme?.featuredSet) {
         const featuredItems = highRarityPool.filter(i => i.set === bannerTheme.featuredSet);
         if (featuredItems.length > 0 && Math.random() < 0.6) {
-          wonItem = featuredItems[Math.floor(Math.random() * featuredItems.length)];
+          wonItem = pickWeightedItem(featuredItems);
         }
       }
-      if (!wonItem) wonItem = highRarityPool[Math.floor(Math.random() * highRarityPool.length)];
+      if (!wonItem) wonItem = pickWeightedItem(highRarityPool);
     } else {
-      let accum = 0;
-      let rand = Math.random() * 100;
-      for (let item of pool) {
-        accum += Number(item.chance);
-        if (rand <= accum) { wonItem = item; break; }
-      }
-      if (!wonItem) wonItem = pool[0];
+      wonItem = pickWeightedItem(lowRarityPool);
     }
 
-    const isDup = (playerData.inventory || []).some(inv => inv?.id === wonItem.id);
+    const isDup = (playerDataRef.current.inventory || []).some(inv => inv?.id === wonItem.id);
     return { item: wonItem, rarity: wonItem.rarity, isDuplicate: isDup };
   };
 
@@ -466,18 +1093,30 @@ export default function App() {
     }
 
     const currentBanner = BANNER_THEMES[activeBannerIdx];
-    let tempPity = playerData.pityCount || 0;
+    const latestPlayer = playerDataRef.current;
+    let tempPity = latestPlayer.pityCount || 0;
+    const ownedOrPulledIds = new Set((latestPlayer.inventory || []).map(inv => inv?.id).filter(Boolean));
     let results = [];
     let hasUR = false, hasSSR = false, hasR = false;
 
     for (let i = 0; i < count; i++) {
       if (count === 10 && i === 9 && !hasR && !hasSSR && !hasUR && poolType === 'virtual') {
         const rPool = VIRTUAL_GACHA_POOL.filter(item => item.rarity === 'R' || item.rarity === 'SSR' || item.rarity === 'UR');
-        const forced = rPool[Math.floor(Math.random() * rPool.length)];
-        const isDup = (playerData.inventory || []).some(inv => inv?.id === forced.id);
+        const forced = pickWeightedItem(rPool);
+        const isDup = ownedOrPulledIds.has(forced.id);
+        ownedOrPulledIds.add(forced.id);
         results.push({ item: forced, rarity: forced.rarity, isDuplicate: isDup });
+        if (forced.rarity === 'UR' || forced.rarity === 'SSR') {
+          tempPity = 0;
+        } else {
+          tempPity += 1;
+        }
       } else {
         const res = rollSingleItem(poolType, tempPity, currentBanner);
+        if (poolType === 'virtual' && res.item?.id) {
+          res.isDuplicate = ownedOrPulledIds.has(res.item.id);
+          ownedOrPulledIds.add(res.item.id);
+        }
         results.push(res);
         if (poolType === 'virtual') {
           if (res.rarity === 'UR' || res.rarity === 'SSR') {
@@ -526,7 +1165,8 @@ export default function App() {
 
       setGachaState(prev => ({ ...prev, status: 'revealed' }));
 
-      let addedInventory = [...(playerData.inventory || [])];
+      const currentData = playerDataRef.current;
+      let addedInventory = [...(currentData.inventory || [])];
       let gainedCores = 0;
       let refundGold = 0;
 
@@ -550,12 +1190,12 @@ export default function App() {
       }
 
       saveGame({
-        ...playerData,
-        gold: (playerData.gold || 0) - cost + refundGold,
+        ...currentData,
+        gold: (currentData.gold || 0) - cost + refundGold,
         inventory: addedInventory,
         pityCount: tempPity,
-        dataCores: (playerData.dataCores || 0) + gainedCores,
-        gachaHistory: [...newHistory, ...(playerData.gachaHistory || [])].slice(0, 60)
+        dataCores: (currentData.dataCores || 0) + gainedCores,
+        gachaHistory: [...newHistory, ...(currentData.gachaHistory || [])].slice(0, 60)
       });
 
       if (gainedCores > 0) {
@@ -566,19 +1206,56 @@ export default function App() {
 
   const closeGacha = () => setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
 
+  const getCoreCost = (rarity) => (rarity === 'UR' ? 15 : (rarity === 'SSR' ? 8 : (rarity === 'R' ? 3 : 1)));
+
   const handleExchangeCore = (item) => {
-    const cost = item.rarity === 'UR' ? 15 : 8;
+    const cost = getCoreCost(item.rarity);
     if ((playerData.dataCores || 0) < cost) return showToast(`資料核心不足！需要 ${cost} 顆`, "error");
     const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
     if (isOwned) return showToast("你已經擁有此裝備！", "error");
 
-    sfx.playRareChime(item.rarity === 'UR');
+    sfx.playRareChime(item.rarity === 'UR' || item.rarity === 'SSR');
     saveGame({
       ...playerData,
       dataCores: playerData.dataCores - cost,
       inventory: [...(playerData.inventory || []), item]
     });
     showToast(`成功解析並解鎖：${item.item}！`, "success");
+  };
+
+  const handleClaimMilestone = (milestone) => {
+    const ownedIds = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
+    const claimed = playerData.claimedMilestones || [];
+    if (ownedIds.size < milestone.count) return showToast(`尚需解鎖 ${milestone.count - ownedIds.size} 件收藏！`, "error");
+    if (claimed.includes(milestone.count)) return;
+
+    sfx.playRareChime(milestone.count >= 25);
+    saveGame({
+      ...playerData,
+      gold: (playerData.gold || 0) + milestone.rewardGold,
+      dataCores: (playerData.dataCores || 0) + milestone.rewardCores,
+      claimedMilestones: [...claimed, milestone.count]
+    });
+    const coreMsg = milestone.rewardCores > 0 ? ` + ${milestone.rewardCores} 資料核心` : '';
+    showToast(`🏆 達成圖鑑里程碑【${milestone.title}】！獲得 ${milestone.rewardGold} G${coreMsg}`, "success");
+  };
+
+  const handleEquipSet = (setKey) => {
+    const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
+    const vfxItem = setItems.find(i => i.type === 'vfx');
+    const skinItem = setItems.find(i => i.type === 'skin');
+    const chipItem = setItems.find(i => i.type === 'chip');
+    if (!vfxItem || !skinItem || !chipItem) return;
+    sfx.playHit();
+    saveGame({
+      ...playerData,
+      equipped: {
+        vfx: vfxItem.id,
+        skin: skinItem.id,
+        chip: chipItem.id
+      }
+    });
+    showToast(`✨ 已一鍵著裝【${SET_BONUSES[setKey]?.name || setKey}】！`, "success");
   };
 
   const getRarityConfig = (rarity) => {
@@ -619,7 +1296,7 @@ export default function App() {
   const currentRarityConfig = getRarityConfig(gachaState.displayRarity);
 
   return (
-    <div className={`min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
 
       <style>{`
         @keyframes ring-spin-right { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -653,15 +1330,33 @@ export default function App() {
         closeGacha={closeGacha}
       />
 
+      {/* --- 戰後大腦語譯戰報 --- */}
+      <BattleReportModal report={battleReport} onClose={() => setBattleReport(null)} />
+
       {/* --- Header --- */}
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
-        <div className="flex justify-between items-center text-sm">
-          <div className="flex flex-col">
+        <div className="flex justify-between items-center text-sm gap-2">
+          <div className="flex flex-col min-w-0">
             <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
-            {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
+            {account && (
+              <div className="flex items-center gap-1.5 text-xs text-gray-400 font-mono min-w-0">
+                {account.mode === 'email' ? <Mail size={11} className="text-cyan-500 shrink-0" /> : <Smartphone size={11} className="text-cyan-500 shrink-0" />}
+                <span className="truncate max-w-[160px]">{account.value}</span>
+                {screen !== 'battle' && screen !== 'login' && (
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    title="切換帳號"
+                    className="text-[10px] text-cyan-400 hover:text-cyan-200 underline flex items-center gap-0.5 shrink-0"
+                  >
+                    <LogOut size={10} /> 切換
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => { setSoundEnabled(!soundEnabled); sfx.enabled = !soundEnabled; }} className="text-gray-400 hover:text-white p-1">
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => { const next = !soundEnabled; setSoundEnabled(next); sfx.enabled = next; tts.enabled = next; if (!next) tts.stop(); }} className="text-gray-400 hover:text-white p-1" title="切換音效與日語發音">
               {soundEnabled ? <Volume2 size={16}/> : <VolumeX size={16}/>}
             </button>
             <span className="text-rose-400 text-xs font-bold bg-rose-950/60 px-2 py-1 rounded border border-rose-800"><Hexagon size={12} className="inline mr-1"/>{playerData.dataCores || 0}</span>
@@ -676,21 +1371,54 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto flex flex-col relative">
+      <main className="flex-1 min-h-0 overflow-y-auto flex flex-col relative">
         {screen === 'login' && (
           <LoginScreen onLogin={handleLoginSuccess} />
         )}
         {/* --- 主選單 --- */}
-        {screen === 'menu' && (
-          <div className="flex-1 flex flex-col p-4 gap-4 justify-center">
+        {screen === 'menu' && (() => {
+          const skillProfile = computeSkillProfile(playerData);
+          const tierStats = getTierSummary(masteryObj);
+          const nemesisPendingCount = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
 
-            <div className="bg-gray-900/80 p-5 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-4">
+          return (
+          <div className="flex-1 flex flex-col p-4 gap-3.5 justify-center">
+
+            <div className="bg-gray-900/80 p-4 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-3">
+              {/* 玩家階級與語感速度摘要 */}
+              <div className="flex items-center justify-between gap-2 bg-gray-950/80 p-2.5 rounded-xl border border-cyan-900/60">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xl shrink-0">{skillProfile.currentRank.badge}</span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-black text-cyan-200 truncate">{skillProfile.currentRank.title}</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${skillProfile.rankProgressPct}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-400 font-bold">{skillProfile.xp} XP</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {(playerData.bestAvgSpeed || 0) > 0 && (
+                    <span className="text-[10px] font-black text-amber-300 bg-amber-950/60 border border-amber-700/50 px-2 py-1 rounded-lg">
+                      ⚡ {playerData.bestAvgSpeed.toFixed(1)}s
+                    </span>
+                  )}
+                  {(playerData.nemesisSlainCount || 0) > 0 && (
+                    <span className="text-[10px] font-black text-rose-300 bg-rose-950/60 border border-rose-700/50 px-2 py-1 rounded-lg">
+                      ⚔️ {playerData.nemesisSlainCount}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-cyan-400 font-black text-sm tracking-wider">
                   <span className="flex items-center gap-1"><Target size={16}/> 世界淨化進度</span>
                   <span className="animate-pulse">{purificationRate}%</span>
                 </div>
-                <div className="h-4 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
+                <div className="h-3.5 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
                   <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_cyan] rounded-full" style={{ width: `${purificationRate}%` }}></div>
                 </div>
                 <div className="flex justify-between items-center mt-1">
@@ -699,18 +1427,18 @@ export default function App() {
                 </div>
                 {showDetailedProgress && (
                   <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 text-xs text-gray-400 flex flex-col gap-1 mt-2 animate-in slide-in-from-top-2">
-                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && VOCAB_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {VOCAB_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_SORT_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_SORT_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_TYPE_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && GRAMMAR_MCQ_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.values(masteryObj).filter((c, i) => c >= 3 && READING_DATA.find(q => q.id === Object.keys(masteryObj)[i])).length} / {READING_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
+                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
                   </div>
                 )}
               </div>
 
               {/* 當前啟用的套裝共鳴提示 */}
               {activeSetBonus && (
-                <div className="bg-cyan-950/40 border border-cyan-600/50 p-3 rounded-xl flex items-center justify-between text-xs">
+                <div className="bg-cyan-950/40 border border-cyan-600/50 p-2.5 rounded-xl flex items-center justify-between text-xs">
                   <div className="flex flex-col">
                     <span className="text-cyan-300 font-black flex items-center gap-1"><Layers size={14}/> {activeSetBonus.name}</span>
                     <span className="text-gray-400 mt-0.5">{activeSetBonus.desc}</span>
@@ -719,191 +1447,377 @@ export default function App() {
                 </div>
               )}
 
-              <div className="w-full h-px bg-cyan-900/30"></div>
-
               <div className="grid grid-cols-2 gap-2 text-sm text-center">
                 <div className="bg-gray-800/50 p-2 rounded text-red-300 border border-gray-700/50">攻 {playerData.atk || 10}</div>
                 <div className="bg-gray-800/50 p-2 rounded text-blue-300 border border-gray-700/50">防 {playerData.def || 5}</div>
               </div>
-              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === new Date().toISOString().split('T')[0]} className={`w-full p-4 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
+              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-3.5 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
                 <CalendarCheck size={18} />
-                {playerData.lastLoginDate === new Date().toISOString().split('T')[0] ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
+                {playerData.lastLoginDate === getLocalDateString() ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
               </button>
             </div>
 
-            <button onClick={startWaveRun} disabled={purificationRate >= 100} className={`bg-cyan-900/50 border border-cyan-400 p-6 rounded-xl flex items-center justify-center gap-3 text-xl font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform ${purificationRate >= 100 ? 'opacity-50' : ''}`}>
-              <Play size={28} /> {purificationRate >= 100 ? '全區域肅清完畢' : '進入作戰 (HP全滿)'}
+            {/* 漸進式難度分級 */}
+            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={14}/> 難度階層篩選</span>
+                {nemesisPendingCount > 0 && (
+                  <span className="text-[10px] font-black text-rose-300 bg-rose-950/70 border border-rose-700/60 px-2 py-0.5 rounded-full">
+                    🔴 潛伏宿敵 {nemesisPendingCount} 題
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {DIFFICULTY_TIERS.map((t) => {
+                  const st = t.id === 'all' ? null : tierStats[Number(t.id)];
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setDifficultyTier(t.id)}
+                      className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                    >
+                      <div className="flex justify-between items-center gap-1">
+                        <span className="text-[11px] font-black truncate">{t.label}</span>
+                        {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
+                      </div>
+                      <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 訓練單元選擇 & 休閒模式／單字提示切換 */}
+            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
+              <div className="flex flex-wrap justify-between items-center gap-1.5">
+                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={14}/> 選擇練習單元</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={toggleVocabHint}
+                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-500 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                  >
+                    {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
+                  </button>
+                  <button
+                    onClick={() => setRelaxedMode(!relaxedMode)}
+                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                  >
+                    {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準模式'}
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {PRACTICE_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setPracticeMode(m.id)}
+                    className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                  >
+                    <div>{m.label}</div>
+                    <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-4 rounded-xl flex items-center justify-center gap-3 text-lg font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
+              <Play size={24} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
             </button>
             
-            <div className="grid grid-cols-3 gap-3 mt-4">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <Backpack className="text-blue-400"/> <span className="text-xs font-bold">裝備庫</span>
+            <div className="grid grid-cols-2 gap-2.5">
+              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                {(() => {
+                  const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
+                  const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
+                  return claimable > 0 ? (
+                    <span className="absolute -top-1.5 -right-1.5 bg-amber-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full animate-bounce">
+                      領獎!
+                    </span>
+                  ) : null;
+                })()}
+                <Backpack size={18} className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
               </button>
-              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <ShoppingCart className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
+              <button onClick={() => setScreen('codex')} className="bg-emerald-900/30 border border-emerald-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                <Brain size={18} className="text-emerald-400"/> <span className="text-xs font-bold">能力圖鑑</span>
               </button>
-              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-4 rounded-xl flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform">
-                <Database className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
+              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                <ShoppingCart size={18} className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
+              </button>
+              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
+                {(playerData.mistakes || []).length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full">{(playerData.mistakes || []).length}</span>
+                )}
+                <Database size={18} className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* --- 裝備庫 --- */}
-        {screen === 'loadout' && (
-          <div className="flex-1 p-4 flex flex-col h-full bg-gray-950">
-            <h2 className="text-blue-400 font-black text-2xl mb-2 flex items-center gap-2 shrink-0"><Backpack /> 虛擬裝備圖鑑</h2>
+        {screen === 'loadout' && (() => {
+          const ownedIdSet = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
+          const ownedTotal = VIRTUAL_GACHA_POOL.filter(i => ownedIdSet.has(i.id)).length;
+          const totalPoolCount = VIRTUAL_GACHA_POOL.length;
+          const collectPct = Math.min(100, Math.round((ownedTotal / totalPoolCount) * 100));
+          const claimedList = playerData.claimedMilestones || [];
 
-            <div className="mb-4 bg-gray-900 border border-gray-800 p-3 rounded-xl">
-              <div className="text-xs text-gray-400 font-bold mb-1 flex items-center gap-1">
-                <Layers size={14}/> 當前套裝共鳴狀態：
+          const renderCategoryCardList = (itemType, defaultId, defaultLabel, emptyTitle) => {
+            const categoryItems = VIRTUAL_GACHA_POOL.filter(i => i.type === itemType);
+            const isDefaultEquipped = itemType === 'chip'
+              ? !playerData.equipped?.chip
+              : playerData.equipped?.[itemType] === defaultId;
+
+            return (
+              <div className="grid grid-cols-1 gap-3">
+                <div
+                  onClick={() => saveGame({ ...playerData, equipped: { ...playerData.equipped, [itemType]: defaultId } })}
+                  className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${isDefaultEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}
+                >
+                  <span className="font-bold">{defaultLabel}</span>
+                  {isDefaultEquipped && <CheckCircle2 className="text-cyan-400" />}
+                </div>
+
+                {categoryItems.map((item, i) => {
+                  const isOwned = ownedIdSet.has(item.id);
+                  const isEquipped = playerData.equipped?.[itemType] === item.id;
+                  const setLabel = SET_BONUSES[item.set]?.name?.replace(' (3/3)', '');
+
+                  if (!isOwned) return (
+                    <div key={item.id || i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-60 select-none">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-bold text-gray-500">【???】{emptyTitle}</span>
+                        {setLabel && <span className="text-[10px] text-cyan-700 font-bold">套裝線索：{setLabel}</span>}
+                      </div>
+                      <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded text-gray-400"><Lock size={12}/> {item.rarity}</div>
+                    </div>
+                  );
+
+                  return (
+                    <div
+                      key={item.id || i}
+                      onClick={() => saveGame({ ...playerData, equipped: { ...playerData.equipped, [itemType]: item.id } })}
+                      className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30 shadow-[0_0_15px_rgba(6,182,212,0.2)]' : 'border-gray-700 bg-gray-800 hover:border-gray-500'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-black shrink-0 ${getRarityConfig(item.rarity).badge}`}>{item.rarity}</span>
+                          <span className={`font-bold truncate ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
+                        </div>
+                        {isEquipped && <CheckCircle2 className="text-cyan-400 shrink-0" />}
+                      </div>
+                      {setLabel && (
+                        <div className="text-[10px] text-cyan-300/90 font-bold">
+                          🧩 套裝：{setLabel}
+                        </div>
+                      )}
+                      {item.buff && (
+                        <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">
+                          🔥 {item.buff}
+                        </div>
+                      )}
+                      {item.desc && (
+                        <div className="text-[11px] text-gray-400 bg-gray-900/70 px-2.5 py-1.5 rounded-lg border border-gray-700/50 leading-relaxed">
+                          「{item.desc}」
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {activeSetBonus ? (
-                <div className="text-xs text-cyan-300 font-bold">
-                  {activeSetBonus.name}：<span className="text-gray-300 font-normal">{activeSetBonus.desc}</span>
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">
-                  未啟動共鳴（同系列裝備滿 3 件時啟動專屬學習加成）
-                </div>
-              )}
-            </div>
+            );
+          };
 
-            <div className="flex-1 overflow-y-auto flex flex-col gap-6 pb-4">
-              
-              {/* 戰術晶片區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold flex items-center gap-1"><Zap size={16}/> 戰術輔助晶片</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'chip').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').length}</span>
+          return (
+            <div className="flex-1 min-h-0 p-4 flex flex-col h-full bg-gray-950">
+              <div className="flex items-center justify-between mb-2 shrink-0">
+                <h2 className="text-blue-400 font-black text-2xl flex items-center gap-2"><Backpack /> 虛擬裝備圖鑑</h2>
+                <span className="text-xs font-black text-cyan-300 bg-cyan-950 px-2.5 py-1 rounded-full border border-cyan-700/60">
+                  總收集 {ownedTotal}/{totalPoolCount} ({collectPct}%)
+                </span>
+              </div>
+
+              <div className="mb-3 bg-gray-900 border border-gray-800 p-3 rounded-xl shrink-0">
+                <div className="text-xs text-gray-400 font-bold mb-1 flex items-center gap-1">
+                  <Layers size={14}/> 當前套裝共鳴狀態：
                 </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, chip: null}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${!playerData.equipped?.chip ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【未裝備晶片】</span>
-                     {!playerData.equipped?.chip && <CheckCircle2 className="text-cyan-400" />}
+                {activeSetBonus ? (
+                  <div className="text-xs text-cyan-300 font-bold">
+                    {activeSetBonus.name}：<span className="text-gray-300 font-normal">{activeSetBonus.desc}</span>
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.chip === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖晶片</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, chip: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 特效區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold">⚔️ 攻擊特效</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'vfx').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').length}</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, vfx: 'default'}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${playerData.equipped?.vfx === 'default' ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【預設】標準光斬</span>
-                     {playerData.equipped?.vfx === 'default' && <CheckCircle2 className="text-cyan-400" />}
+                ) : (
+                  <div className="text-xs text-gray-500">
+                    未啟動共鳴（同系列裝備滿 3 件時啟動專屬學習加成）
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.vfx === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖特效</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, vfx: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+                )}
               </div>
 
-              {/* 外觀區塊 */}
-              <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end border-b border-gray-800 pb-2">
-                  <h3 className="text-gray-400 font-bold">👾 怪物外觀</h3>
-                  <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">收集度: {(playerData.inventory || []).filter(i => i?.type === 'skin').length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').length}</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <div onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, skin: 'default'}})} className={`p-4 rounded-xl border-2 flex items-center justify-between cursor-pointer ${playerData.equipped?.skin === 'default' ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-800 bg-gray-900'}`}>
-                     <span className="font-bold">【預設】病毒史萊姆</span>
-                     {playerData.equipped?.skin === 'default' && <CheckCircle2 className="text-cyan-400" />}
+              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-6 pb-4">
+
+                {/* 圖鑑里程碑進度與領獎 */}
+                <div className="bg-gray-900/80 border border-amber-800/40 rounded-2xl p-3.5 flex flex-col gap-3">
+                  <div className="flex justify-between items-center text-xs font-bold">
+                    <span className="text-amber-300 flex items-center gap-1"><Trophy size={14}/> 圖鑑里程碑獎勵</span>
+                    <span className="text-gray-400">已解鎖 {ownedTotal} 件</span>
                   </div>
-
-                  {VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').map((item, i) => {
-                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                    const isEquipped = playerData.equipped?.skin === item.id;
-                    if (!isOwned) return (
-                      <div key={i} className="p-4 rounded-xl border-2 border-gray-800 bg-gray-900/50 flex justify-between items-center opacity-50 grayscale select-none">
-                         <span className="font-bold text-gray-500">【???】未解鎖外觀</span>
-                         <div className="flex items-center gap-1 text-xs font-bold bg-gray-800 px-2 py-1 rounded"><Lock size={12}/> {item.rarity}</div>
-                      </div>
-                    );
-
-                    return (
-                      <div key={i} onClick={() => saveGame({...playerData, equipped: {...playerData.equipped, skin: item.id}})} className={`p-4 rounded-xl border-2 flex flex-col gap-2 cursor-pointer transition-colors ${isEquipped ? 'border-cyan-400 bg-cyan-950/30' : 'border-gray-700 bg-gray-800'}`}>
-                         <div className="flex items-center justify-between">
-                           <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                           {isEquipped && <CheckCircle2 className="text-cyan-400" />}
-                         </div>
-                         {item.buff && <div className="text-xs text-yellow-300 bg-yellow-950/30 px-2 py-1 rounded w-fit border border-yellow-900/50">🔥 {item.buff}</div>}
-                      </div>
-                    );
-                  })}
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-cyan-500 via-amber-400 to-rose-500 transition-all duration-500" style={{ width: `${collectPct}%` }} />
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {COLLECTION_MILESTONES.map((m) => {
+                      const isClaimed = claimedList.includes(m.count);
+                      const canClaim = ownedTotal >= m.count && !isClaimed;
+                      return (
+                        <button
+                          key={m.count}
+                          onClick={() => handleClaimMilestone(m)}
+                          disabled={!canClaim && !isClaimed}
+                          className={`min-w-[130px] p-2.5 rounded-xl border text-left flex flex-col gap-1 transition-all shrink-0 ${
+                            isClaimed
+                              ? 'bg-gray-950 border-gray-800 text-gray-500 opacity-60'
+                              : canClaim
+                                ? 'bg-amber-950/70 border-amber-400 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.3)] animate-pulse active:scale-95'
+                                : 'bg-gray-950/70 border-gray-800 text-gray-400'
+                          }`}
+                        >
+                          <div className="text-[11px] font-black truncate">{m.title}</div>
+                          <div className="text-[10px] text-yellow-400 font-bold">
+                            +{m.rewardGold}G {m.rewardCores > 0 ? `/ +${m.rewardCores}核心` : ''}
+                          </div>
+                          <div className="text-[10px] font-black mt-0.5">
+                            {isClaimed ? '✅ 已領取' : (canClaim ? '🎁 點擊領取' : `進度 ${Math.min(ownedTotal, m.count)}/${m.count}`)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
+
+                {/* 套裝收集總覽 & 一鍵著裝 */}
+                <div className="flex flex-col gap-2">
+                  <div className="text-xs font-bold text-gray-400 flex items-center gap-1"><Sparkles size={14} className="text-cyan-400"/> 主題套裝共鳴一覽（集齊 3 件可一鍵著裝）</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(SET_BONUSES).map(([setKey, bonus]) => {
+                      const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
+                      const ownedInSet = setItems.filter(i => ownedIdSet.has(i.id)).length;
+                      const isComplete = ownedInSet >= 3;
+                      const isActive = activeSetBonus?.key === setKey;
+                      return (
+                        <div key={setKey} className={`p-2.5 rounded-xl border flex flex-col justify-between gap-1.5 ${isActive ? 'bg-cyan-950/50 border-cyan-400' : (isComplete ? 'bg-gray-900 border-emerald-600/60' : 'bg-gray-900/60 border-gray-800')}`}>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-black text-white truncate">{bonus.name.replace(' (3/3)', '')}</span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded shrink-0 ${isComplete ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-800 text-gray-400'}`}>
+                              {ownedInSet}/3
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-gray-400 leading-snug line-clamp-2">{bonus.desc}</div>
+                          {isComplete && (
+                            <button
+                              onClick={() => handleEquipSet(setKey)}
+                              className={`text-[10px] font-black py-1 rounded-lg transition-colors ${isActive ? 'bg-cyan-500 text-black' : 'bg-emerald-700 hover:bg-emerald-600 text-white'}`}
+                            >
+                              {isActive ? '⚡ 已啟動共鳴' : '⚡ 一鍵著裝'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 戰術晶片區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold flex items-center gap-1"><Zap size={16}/> 戰術輔助晶片</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'chip').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('chip', null, '【未裝備晶片】', '未解鎖晶片')}
+                </div>
+
+                {/* 特效區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold">⚔️ 攻擊特效</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'vfx').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('vfx', 'default', '【預設】標準光斬', '未解鎖特效')}
+                </div>
+
+                {/* 外觀區塊 */}
+                <div className="flex flex-col gap-3">
+                  <div className="flex justify-between items-end border-b border-gray-800 pb-2">
+                    <h3 className="text-gray-400 font-bold">👾 怪物外觀</h3>
+                    <span className="text-xs font-bold text-cyan-500 bg-cyan-950 px-2 py-1 rounded">
+                      收集度: {VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin' && ownedIdSet.has(i.id)).length}/{VIRTUAL_GACHA_POOL.filter(i => i.type === 'skin').length}
+                    </span>
+                  </div>
+                  {renderCategoryCardList('skin', 'default', '【預設】病毒史萊姆', '未解鎖外觀')}
+                </div>
+
               </div>
 
+              <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
+                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
+              </div>
             </div>
+          );
+        })()}
 
-            <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
-               <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
-          </div>
+        {/* --- 日語能力樹＆圖鑑 --- */}
+        {screen === 'codex' && (
+          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} />
         )}
 
         {/* --- 戰鬥畫面 --- */}
-        {screen === 'battle' && combatUI.data && (
-           <div className="flex-1 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10">
+        {screen === 'battle' && combatUI.data && (() => {
+           const isNonPotion = combatUI.type !== 'potion';
+           const currentLv = isNonPotion ? (masteryObj[combatUI.data.id] || 0) : 0;
+           const currentFailCnt = isNonPotion ? (playerData.mistakeCounts?.[combatUI.data.id] || 0) : 0;
+           const stage = isNonPotion ? getMasteryStage(currentLv, currentFailCnt) : null;
+           const tier = isNonPotion ? getQuestionTier(combatUI.data.id) : null;
+           const isNemesis = isNonPotion && currentFailCnt >= 2 && currentLv === 0;
+           const readingAnalysis = combatUI.type === 'reading' ? analyzeReadingPassage(combatUI.data.text, masteryObj) : null;
+
+           return (
+           <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-2">
                  <span className="font-bold text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
                  <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
-               <button onClick={() => setIsPaused(true)} disabled={feedback.show} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               <button onClick={() => setIsPaused(true)} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
              </div>
+
+             {isNonPotion && stage && (
+               <div className="flex flex-wrap items-center justify-center gap-1.5 mb-1.5 z-10 shrink-0">
+                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-gray-900 text-gray-300 border border-gray-700">
+                   難度 Lv.{tier}
+                 </span>
+                 <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${stage.badgeClass}`}>
+                   {stage.label}
+                 </span>
+                 {isNemesis && (
+                   <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-200 border border-rose-500 animate-pulse flex items-center gap-1">
+                     <Swords size={11} /> 宿敵警報（曾錯 {currentFailCnt} 次・擊破 +30G）
+                   </span>
+                 )}
+               </div>
+             )}
 
              <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
                {combo > 1 && (<div className={`font-black italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
              </div>
 
-             <div className={`flex-1 flex flex-col transition-opacity duration-300 ${isPaused || feedback.show ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[160px]">
+             <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
+               <div className="relative flex flex-col items-center justify-center my-auto min-h-[150px]">
                  {renderVFX()}
 
-                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400'}`}>
+                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${isNemesis ? 'bg-rose-950 border-rose-500 text-rose-400 animate-pulse drop-shadow-[0_0_20px_rgba(244,63,94,0.6)]' : (waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400')}`}>
                    {renderMonsterEmoji()}
                    {damageNumbers.map(d => (
                      <div key={d.id} className={`absolute font-black pointer-events-none drop-shadow-md flex items-center gap-1 ${d.isHeal ? 'text-green-400 text-3xl' : (d.isCrit ? 'text-yellow-400 text-4xl' : 'text-white text-2xl')}`} style={{ left: `calc(50% + ${d.offsetX}px)`, top: '10%', animation: 'damage-float 1s ease-out forwards' }}>
@@ -912,47 +1826,152 @@ export default function App() {
                    ))}
                  </div>
 
-                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
-                   <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
-                     <Clock size={20} className={isPaused || feedback.show ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                 {equippedSkin?.battleQuip && (
+                   <div className="mt-2 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
+                     {equippedSkin.battleQuip}
                    </div>
+                 )}
+
+                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
+                   relaxedMode ? (
+                     <div className="flex items-center gap-2 text-cyan-300 font-bold bg-cyan-950/70 px-4 py-1.5 rounded-full text-sm mt-4 border border-cyan-500/40 z-10">
+                       ☕ 休閒學習模式（無時間限制）
+                     </div>
+                   ) : (
+                     <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
+                       <Clock size={20} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                     </div>
+                   )
                  )}
                </div>
 
                <div className="flex-1 flex flex-col justify-end gap-4 pb-4">
                  {combatUI.type === 'vocab' && (
                    <div className="animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-5xl font-black mb-8 tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose pt-4"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
-                     <div className="grid grid-cols-2 gap-3">
-                       {(combatUI.data.options || []).map((opt, i) => (<button key={i} onClick={() => handleVocabClick(opt)} className="bg-gray-800 border-2 border-cyan-900 p-5 rounded-xl text-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold"><RubyText text={opt} showRuby={false} /></button>))}
+                     <div className="text-center text-xs font-bold text-cyan-400 tracking-wider mb-1">
+                       {combatUI.data.vocabMode === 'meaning' ? '📖 請選擇正確中文意思' : '🔤 請選擇正確讀音'}
+                     </div>
+                     <div className="flex items-center justify-center gap-3 mb-2 pt-2">
+                       <div className="text-center text-5xl font-black tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
+                       {tts.isSupported() && (
+                         <button type="button" onClick={() => tts.speak(combatUI.data.ch)} title="朗讀單字" className="p-2.5 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/60 text-cyan-300 active:scale-90 transition-transform shrink-0">
+                           <Volume2 size={20} />
+                         </button>
+                       )}
+                     </div>
+                     <div className="min-h-[28px] flex justify-center mb-4 px-2">
+                       {currentLv === 0 && (
+                         vocabHintEnabled ? (
+                           <button
+                             type="button"
+                             onClick={toggleVocabHint}
+                             className="text-[11px] font-bold text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/60 px-3 py-1 rounded-full flex items-center gap-1.5 active:scale-95 transition-all max-w-full"
+                           >
+                             {combatUI.data.vocabMode === 'reading' && combatUI.data.answers?.[0] ? (
+                               <span>💡 輔助提示：讀音共 {combatUI.data.answers[0].length} 個假名</span>
+                             ) : (
+                               <span className="truncate">
+                                 💡 語境線索：{combatUI.data.example ? <RubyText text={combatUI.data.example} showRuby={true} /> : '請依假名辨識詞意'}
+                               </span>
+                             )}
+                             <span className="text-[10px] text-emerald-400/80 underline shrink-0">隱藏</span>
+                           </button>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={toggleVocabHint}
+                             className="text-[11px] font-bold text-gray-300 bg-gray-900/80 hover:bg-gray-800 border border-gray-700 px-3 py-1 rounded-full flex items-center gap-1.5 active:scale-95 transition-all"
+                           >
+                             <Eye size={12} className="text-emerald-400" /> 💡 初見輔助提示：關閉（點擊開啟）
+                           </button>
+                         )
+                       )}
+                       {currentLv >= 2 && (
+                         <span className="text-[11px] font-bold text-amber-300/90 bg-amber-950/40 border border-amber-700/40 px-3 py-0.5 rounded-full">
+                           🔥 進階熟練態：無假名提示・直覺速答觸發閃電爆擊
+                         </span>
+                       )}
+                     </div>
+                     <div className={`grid gap-3 ${combatUI.data.vocabMode === 'meaning' ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                       {(combatUI.data.options || []).map((opt, i) => (
+                         <button key={i} onClick={() => handleVocabClick(opt)} className={`bg-gray-800 border-2 border-cyan-900 p-4 sm:p-5 rounded-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold ${combatUI.data.vocabMode === 'meaning' ? 'text-base sm:text-lg text-left' : 'text-xl text-center'}`}>
+                           <RubyText text={opt} showRuby={currentLv === 0 && vocabHintEnabled} />
+                         </button>
+                       ))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'sort' && (
-                   <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-gray-300 text-xl font-bold bg-gray-900/50 p-3 rounded-lg leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
-                     <div className="flex justify-center gap-2">
-                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`w-20 h-16 rounded-lg border-2 flex items-center justify-center text-sm transition-all leading-loose ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-105' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={false}/></button>))}
+                   <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4">
+                     <div className="flex flex-col items-center justify-center gap-1.5 bg-gray-900/50 p-3 rounded-lg border border-gray-800">
+                       <div className="flex items-center justify-center gap-2">
+                         <div className="text-center text-gray-200 text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={currentLv === 0} /></div>
+                         {tts.isSupported() && (
+                           <button type="button" onClick={() => tts.speak(combatUI.data.context)} title="朗讀題幹" className="p-2 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform shrink-0">
+                             <Volume2 size={16} />
+                           </button>
+                         )}
+                       </div>
+                       {combatUI.data.translation && (
+                         currentLv < 2 || showTranslationHint ? (
+                           <div className="text-xs sm:text-sm text-cyan-300/90 font-bold text-center">
+                             🎯 句意：{combatUI.data.translation}
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => setShowTranslationHint(true)}
+                             className="text-[11px] text-amber-300 bg-amber-950/50 hover:bg-amber-900/50 border border-amber-700/60 px-3 py-1 rounded-full font-bold flex items-center gap-1 active:scale-95 transition-transform"
+                           >
+                             <Eye size={12} /> 🔥 Lv.{currentLv} 進階無翻譯挑戰（點擊偷看中譯）
+                           </button>
+                         )
+                       )}
                      </div>
-                     <div className="grid grid-cols-2 gap-3 mt-4">
-                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-loose ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={false} /></button>))}
+                     <div className="flex justify-center gap-1.5 sm:gap-2">
+                       {combatUI.slots.map((slot, i) => (<button key={`s${i}`} onClick={() => handleSortClick(slot, false, i)} className={`flex-1 min-w-0 min-h-[4rem] px-1.5 py-1 rounded-lg border-2 flex items-center justify-center text-xs sm:text-sm text-center break-all transition-all leading-snug ${slot ? 'bg-cyan-900 border-cyan-400 text-white font-bold scale-[1.02]' : 'border-dashed border-gray-600 bg-gray-900'}`}><RubyText text={slot} showRuby={currentLv === 0}/></button>))}
+                     </div>
+                     <div className="grid grid-cols-2 gap-3 mt-1">
+                       {(combatUI.data.available || []).map((part, i) => (<button key={`a${i}`} onClick={() => handleSortClick(part, true, i)} disabled={!part} className={`p-3.5 sm:p-4 rounded-xl border-2 text-sm font-bold transition-transform leading-snug break-all ${part ? 'bg-gray-800 border-gray-600 hover:bg-gray-700 active:scale-90' : 'bg-transparent border-transparent text-transparent scale-90'}`}><RubyText text={part || '已填入'} showRuby={currentLv === 0} /></button>))}
                      </div>
                    </div>
                  )}
                  {combatUI.type === 'type' && (
-                   <form onSubmit={handleTypeSubmit} className="flex flex-col gap-4 animate-in slide-in-from-bottom-4">
-                     <div className="text-center text-xl font-bold bg-gray-900 p-4 rounded-lg border border-gray-700 leading-loose"><RubyText text={combatUI.data.prompt} showRuby={false} /></div>
-                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
-                     <button type="submit" className="bg-cyan-700 text-white p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
+                   <form onSubmit={handleTypeSubmit} className="flex flex-col gap-3.5 animate-in slide-in-from-bottom-4">
+                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2 items-center">
+                       <div className="text-center text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.prompt} showRuby={currentLv === 0} /></div>
+                       {combatUI.data.exampleZh && (
+                         currentLv < 2 || showTranslationHint ? (
+                           <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2 w-full">
+                             🎯 目標句意：{combatUI.data.exampleZh}
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => setShowTranslationHint(true)}
+                             className="text-[11px] text-amber-300 bg-amber-950/50 hover:bg-amber-900/50 border border-amber-700/60 px-3 py-1 rounded-full font-bold flex items-center gap-1 active:scale-95 transition-transform"
+                           >
+                             <Eye size={12} /> 🔥 Lv.{currentLv} 進階無翻譯挑戰（點擊偷看中譯）
+                           </button>
+                         )
+                       )}
+                     </div>
+                     {combatUI.data.base && (
+                       <div className="text-center text-xs text-cyan-400 font-bold">
+                         💡 支援漢字或平假名輸入（原形：{combatUI.data.base}）
+                       </div>
+                     )}
+                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-4 sm:p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
+                     <button type="submit" className="bg-cyan-700 text-white p-4 sm:p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
                    </form>
                  )}
                  {combatUI.type === 'mcq' && (
                    <div className="flex flex-col h-full animate-in zoom-in-95">
-                     <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={false} /></div>
+                     <div className="text-center text-lg font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose whitespace-pre-wrap"><RubyText text={combatUI.data.question} showRuby={currentLv === 0} /></div>
                      <div className="grid grid-cols-1 gap-2 mt-4">
                        {combatUI.data.options.map((opt, idx) => (
-                         <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold">
-                           <RubyText text={opt} showRuby={false} />
+                         <button key={idx} onClick={() => handleMcqClick(idx)} className="bg-gray-800 border-2 border-cyan-900/50 hover:border-cyan-500 p-4 rounded-xl text-left active:bg-cyan-900 active:scale-95 transition-all font-bold leading-loose">
+                           <RubyText text={opt} showRuby={currentLv === 0} />
                          </button>
                        ))}
                      </div>
@@ -960,18 +1979,92 @@ export default function App() {
                  )}
                  {combatUI.type === 'potion' && (
                    <div className="flex flex-col h-full animate-in zoom-in-95">
-                     <div className="text-center text-xl font-bold mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                     <div className="mb-auto mt-4 px-4 bg-gray-900/50 p-4 rounded-lg border border-gray-800 flex flex-col gap-2">
+                       <div className="text-center text-xl font-bold leading-loose"><RubyText text={combatUI.data.context} showRuby={false} /></div>
+                       {combatUI.data.translation && (
+                         <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2">
+                           🎯 句意：{combatUI.data.translation}
+                         </div>
+                       )}
+                     </div>
                      <div className="flex gap-4 mt-8">
-                       <button onClick={() => handlePotionClick(0)} className="flex-1 bg-red-900/40 border-2 border-red-500/50 p-8 rounded-2xl flex flex-col items-center gap-2 active:bg-red-800/60 active:scale-90 transition-transform"><span className="text-2xl font-bold"><RubyText text={combatUI.data.options[0]} showRuby={false} /></span></button>
-                       <button onClick={() => handlePotionClick(1)} className="flex-1 bg-blue-900/40 border-2 border-blue-500/50 p-8 rounded-2xl flex flex-col items-center gap-2 active:bg-blue-800/60 active:scale-90 transition-transform"><span className="text-2xl font-bold"><RubyText text={combatUI.data.options[1]} showRuby={false} /></span></button>
+                       <button onClick={() => handlePotionClick(0)} className="flex-1 bg-red-900/40 border-2 border-red-500/50 p-6 sm:p-8 rounded-2xl flex flex-col items-center justify-center gap-2 active:bg-red-800/60 active:scale-90 transition-transform"><span className="text-xl sm:text-2xl font-bold text-center break-all"><RubyText text={combatUI.data.options[0]} showRuby={false} /></span></button>
+                       <button onClick={() => handlePotionClick(1)} className="flex-1 bg-blue-900/40 border-2 border-blue-500/50 p-6 sm:p-8 rounded-2xl flex flex-col items-center justify-center gap-2 active:bg-blue-800/60 active:scale-90 transition-transform"><span className="text-xl sm:text-2xl font-bold text-center break-all"><RubyText text={combatUI.data.options[1]} showRuby={false} /></span></button>
                      </div>
                    </div>
                  )}
-                 {combatUI.type === 'reading' && (
-                   <div className="flex flex-col gap-4 overflow-y-auto max-h-[60vh] animate-in fade-in">
-                     <div className="bg-gray-900 border border-red-900/50 p-5 rounded-xl text-base text-gray-200 leading-[2.5] shadow-inner"><RubyText text={combatUI.data.text} showRuby={false} /></div>
-                     <div className="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
-                       <p className="font-bold text-cyan-200 text-lg mb-5 leading-loose"><RubyText text={combatUI.data.questions[combatUI.readingStep].q} showRuby={false} /></p>
+                 {combatUI.type === 'reading' && readingAnalysis && (
+                   <div className="flex flex-col gap-3 overflow-y-auto max-h-[62vh] animate-in fade-in">
+                     {/* 已知單字解碼條 */}
+                     <div className="bg-cyan-950/40 border border-cyan-800/60 p-2.5 rounded-xl flex flex-col gap-1.5">
+                       <div className="flex justify-between items-center text-[11px] font-bold">
+                         <span className="text-cyan-300 flex items-center gap-1">
+                           <Brain size={13} /> 已知單字解碼：已辨識 {readingAnalysis.knownCount} / {readingAnalysis.matchedWords.length} 個詞彙
+                         </span>
+                         <span className="text-emerald-300 font-black">{readingAnalysis.decodeRate}%</span>
+                       </div>
+                       <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                         <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style={{ width: `${readingAnalysis.decodeRate}%` }} />
+                       </div>
+                       {readingAnalysis.knownCount > 0 && (
+                         <div className="text-[10px] text-gray-400">
+                           💡 點擊文中高亮詞彙可即時偷看過去學過的假名與中文解釋
+                         </div>
+                       )}
+                     </div>
+
+                     <div className="bg-gray-900 border border-red-900/50 p-4 rounded-xl text-base text-gray-200 leading-[2.3] shadow-inner">
+                       {tts.isSupported() && (
+                         <button type="button" onClick={() => tts.speak(combatUI.data.text)} title="朗讀文章" className="float-right ml-2 mb-1 p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                           <Volume2 size={14} /> 朗讀
+                         </button>
+                       )}
+                       {readingAnalysis.segments.map((seg, idx) => (
+                         seg.match ? (
+                           <button
+                             key={idx}
+                             type="button"
+                             onClick={() => setPeekVocabWord(seg.match)}
+                             className={`inline font-bold px-1 mx-0.5 rounded border-b-2 transition-colors ${
+                               seg.match.mastery >= 3
+                                 ? 'text-amber-300 bg-amber-950/50 border-amber-400/80 hover:bg-amber-900/60'
+                                 : 'text-cyan-300 bg-cyan-950/50 border-cyan-400/80 hover:bg-cyan-900/60'
+                             }`}
+                           >
+                             {seg.text}
+                           </button>
+                         ) : (
+                           <span key={idx}>{seg.text}</span>
+                         )
+                       ))}
+                     </div>
+
+                     {peekVocabWord && (
+                       <div className="bg-gray-950 border border-cyan-500/70 p-3 rounded-xl flex items-center justify-between gap-2 animate-in fade-in duration-150">
+                         <div className="flex flex-col min-w-0">
+                           <div className="text-sm font-black text-cyan-200 flex items-center gap-1.5 flex-wrap">
+                             <RubyText text={peekVocabWord.ch} showRuby={true} />
+                             <span className={`text-[10px] px-1.5 py-0.5 rounded ${peekVocabWord.mastery >= 3 ? 'bg-amber-500/20 text-amber-300' : 'bg-cyan-500/20 text-cyan-300'}`}>
+                               Lv.{Math.min(3, peekVocabWord.mastery)}
+                             </span>
+                           </div>
+                           <div className="text-xs text-gray-300 mt-0.5">{peekVocabWord.usage}</div>
+                         </div>
+                         <div className="flex items-center gap-1.5 shrink-0">
+                           {tts.isSupported() && (
+                             <button type="button" onClick={() => tts.speak(peekVocabWord.ch)} className="p-1.5 rounded-lg bg-gray-800 hover:bg-cyan-900 text-cyan-300">
+                               <Volume2 size={14} />
+                             </button>
+                           )}
+                           <button type="button" onClick={() => setPeekVocabWord(null)} className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400">
+                             <X size={14} />
+                           </button>
+                         </div>
+                       </div>
+                     )}
+
+                     <div className="bg-gray-800 p-4 rounded-xl shadow-lg border border-gray-700">
+                       <p className="font-bold text-cyan-200 text-lg mb-4 leading-loose"><RubyText text={combatUI.data.questions[combatUI.readingStep].q} showRuby={false} /></p>
                        <div className="flex flex-col gap-3">
                          {combatUI.data.questions[combatUI.readingStep].options.map((opt, i) => (<button key={i} onClick={() => handleReadingClick(i)} className="p-4 rounded-xl border-2 border-gray-600 bg-gray-900 text-left hover:bg-gray-800 active:scale-95 transition-transform font-bold leading-loose"><RubyText text={opt} showRuby={false} /></button>))}
                        </div>
@@ -996,11 +2089,30 @@ export default function App() {
                     </h3>
                   </div>
                   <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
-                    {feedback.correct && (<div><span className="text-sm text-gray-400 font-bold block mb-2">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span><div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div></div>)}
+                    {feedback.correct && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-400 font-bold">🎯 {feedback.isWrong ? '正確防禦指令' : '防禦指令'}</span>
+                          {tts.isSupported() && feedback.correct !== '時間耗盡' && (
+                            <button type="button" onClick={() => tts.speakAnswer(feedback.correct)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                              <Volume2 size={14} /> 發音
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-2xl font-black text-green-400 bg-green-950/30 p-4 rounded-xl border border-green-900/50 leading-loose"><RubyText text={feedback.correct} showRuby={true} /></div>
+                      </div>
+                    )}
                     {feedback.text && (<div><span className="text-sm text-gray-400 font-bold block mb-2">📝 漏洞解析</span><div className="text-lg text-gray-200 bg-gray-800 p-4 rounded-xl leading-[1.8]"><RubyText text={feedback.text} showRuby={true} /></div></div>)}
                     {feedback.example && (
                       <div>
-                        <span className="text-sm text-gray-400 font-bold block mb-2">🗣️ 應用範例</span>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-400 font-bold">🗣️ 應用範例</span>
+                          {tts.isSupported() && feedback.example !== '【文章翻譯】' && (
+                            <button type="button" onClick={() => tts.speak(feedback.example)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-yellow-700/50 text-yellow-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
+                              <Volume2 size={14} /> 朗讀例句
+                            </button>
+                          )}
+                        </div>
                         <div className="text-lg text-yellow-300 bg-yellow-950/30 p-4 rounded-xl border border-yellow-900/50 leading-loose">
                           <RubyText text={feedback.example} showRuby={true} />
                           {feedback.exampleZh && <div className="text-sm text-gray-400 mt-2 font-normal border-t border-yellow-900/30 pt-2">{feedback.exampleZh}</div>}
@@ -1030,11 +2142,12 @@ export default function App() {
               </div>
             )}
            </div>
-        )}
+           );
+        })()}
 
         {/* --- 商城 --- */}
         {screen === 'shop' && (
-          <div className="flex-1 flex flex-col h-full bg-gray-950">
+          <div className="flex-1 min-h-0 flex flex-col h-full bg-gray-950 relative overflow-hidden">
             <div className="p-4 bg-gray-900 border-b border-gray-800 shrink-0 relative">
               <h2 onClick={handleSecretClick} className="text-yellow-400 font-black text-2xl flex items-center gap-2 cursor-pointer select-none"><ShoppingCart /> 獎勵商城</h2>
               <div className="absolute right-4 top-4 flex items-center gap-3">
@@ -1049,12 +2162,12 @@ export default function App() {
               <button onClick={() => setShopTab('history')} className={`flex-1 p-4 text-base font-bold flex justify-center gap-2 transition-colors ${shopTab === 'history' ? 'bg-gray-800 text-orange-400 border-b-2 border-orange-400' : 'text-gray-500'}`}><History size={20}/> 紀錄</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 flex flex-col relative">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col relative">
               {shopTab === 'gacha' && (
                 <div className="flex flex-col h-full gap-6 pb-4">
 
                   {/* 輪替卡池橫幅選擇 */}
-                  <div className="flex gap-2 overflow-x-auto pb-1">
+                  <div className="flex gap-2 overflow-x-auto pb-1 shrink-0">
                     {BANNER_THEMES.map((theme, idx) => (
                       <button
                         key={theme.id}
@@ -1127,70 +2240,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* 天井核心商店 Modal */}
-              {showCoreShop && (
-                <div className="absolute inset-0 z-40 bg-black/95 backdrop-blur-md flex flex-col p-5 animate-in zoom-in-95 duration-200">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-black text-xl text-rose-400 flex items-center gap-2"><Hexagon /> 資料核心黑市 (天井兌換)</h3>
-                    <button onClick={() => setShowCoreShop(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full"><X size={20}/></button>
-                  </div>
-                  <div className="text-xs text-gray-400 mb-4 bg-gray-900 p-3 rounded-lg border border-gray-800">
-                    重複裝備轉化為資料核心。這裡可免除隨機性，直接指定兌換神裝湊齊套裝！
-                  </div>
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-3">
-                    {VIRTUAL_GACHA_POOL.filter(i => i.rarity === 'SSR' || i.rarity === 'UR').map((item, i) => {
-                      const cost = item.rarity === 'UR' ? 15 : 8;
-                      const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
-                      return (
-                        <div key={i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center">
-                          <div className="flex flex-col">
-                            <span className={`font-bold ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
-                            <span className="text-[10px] text-gray-400 mt-0.5">{item.buff}</span>
-                          </div>
-                          <button
-                            disabled={isOwned || (playerData.dataCores || 0) < cost}
-                            onClick={() => handleExchangeCore(item)}
-                            className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
-                          >
-                            {isOwned ? '已擁有' : `${cost} 核心兌換`}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* 卡池詳情 Modal */}
-              {showGachaDetails && (
-                <div className="absolute inset-0 z-40 bg-black/90 backdrop-blur-sm flex flex-col p-6 animate-in zoom-in-95 duration-200">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className={`font-black text-xl ${showGachaDetails === 'virtual' ? 'text-blue-400' : 'text-yellow-400'}`}>
-                      {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情' : '🎁 實體卡池詳情'}
-                    </h3>
-                    <button onClick={() => setShowGachaDetails(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full hover:text-white"><X size={20}/></button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-3 pb-6">
-                    {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(b.chance)-Number(a.chance)).map((p, i) => {
-                      const cfg = getRarityConfig(p.rarity);
-                      return (
-                        <div key={i} className="flex justify-between items-center bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow-sm">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            <span className={`text-xs px-2 py-1 rounded font-black shrink-0 ${cfg.badge}`}>{p.rarity}</span>
-                            <div className="flex flex-col truncate">
-                              <span className={`truncate text-base ${cfg.color}`}>{p.item}</span>
-                              {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
-                            </div>
-                          </div>
-                          <span className="text-gray-300 font-black text-lg shrink-0 ml-2">{p.chance}%</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {shopTab === 'settings' && (
                 <div className="flex flex-col pb-6">
                   <div className="bg-gray-900 p-5 rounded-2xl border border-gray-800 mb-5 text-center">
@@ -1206,7 +2255,7 @@ export default function App() {
                           <div key={i} className="bg-gray-800 p-4 rounded-xl flex justify-between items-center border border-gray-700"><span className="font-bold text-gray-200 truncate text-lg">{p.item}</span><span className="text-cyan-400 font-bold bg-cyan-950 px-3 py-1 rounded-lg text-lg">{p.chance}%</span></div>
                         ))}
                       </div>
-                      <button onClick={() => { setEditPool([...(playerData.gachaPool || DEFAULT_GACHA_POOL)]); setIsEditingShop(true); }} className="mt-4 bg-cyan-900/50 border-2 border-cyan-500 text-cyan-200 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">
+                      <button onClick={() => { setEditPool((playerData.gachaPool || DEFAULT_GACHA_POOL).map(item => ({ ...item }))); setIsEditingShop(true); }} className="mt-4 bg-cyan-900/50 border-2 border-cyan-500 text-cyan-200 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">
                         {playerData.isGachaLocked ? '🔓 編輯模式 (儲存收 1000G)' : '📝 編輯獎勵 (初次免費)'}
                       </button>
                     </div>
@@ -1214,33 +2263,42 @@ export default function App() {
                     <div className="flex flex-col gap-4">
                       <div className="flex flex-col gap-3">
                         {editPool.map((p, i) => (
-                          <div key={p.id} className="bg-gray-800 p-4 rounded-2xl border border-gray-600 flex flex-col gap-3">
-                            <input type="text" value={p.item} onChange={e => { const np = [...editPool]; np[i].item = e.target.value; setEditPool(np); }} placeholder="獎勵名稱" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white focus:outline-none focus:border-cyan-500 font-bold" />
+                          <div key={p.id || i} className="bg-gray-800 p-4 rounded-2xl border border-gray-600 flex flex-col gap-3">
+                            <input type="text" value={p.item} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, item: val } : it)); }} placeholder="獎勵名稱" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white focus:outline-none focus:border-cyan-500 font-bold" />
                             <div className="flex gap-2">
                               <div className="flex-1 relative">
-                                <input type="number" min="1" max="100" value={p.chance} onChange={e => { const np = [...editPool]; np[i].chance = e.target.value; setEditPool(np); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
+                                <input type="number" min="1" max="100" value={p.chance} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, chance: val } : it)); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
                                 <span className="absolute right-4 top-4 text-gray-500 font-bold">%</span>
                               </div>
-                              <button onClick={() => { const np = [...editPool]; np.splice(i, 1); setEditPool(np); }} className="bg-red-900/50 text-red-400 p-4 rounded-xl border-2 border-red-800 active:scale-95 w-16 flex items-center justify-center"><Trash2 size={24}/></button>
+                              <button onClick={() => setEditPool(prev => prev.filter((_, idx) => idx !== i))} className="bg-red-900/50 text-red-400 p-4 rounded-xl border-2 border-red-800 active:scale-95 w-16 flex items-center justify-center"><Trash2 size={24}/></button>
                             </div>
                           </div>
                         ))}
                       </div>
-                      <button onClick={() => setEditPool([...editPool, { id: `g${Date.now()}`, item: '', chance: 0 }])} className="border-2 border-dashed border-gray-600 text-gray-400 p-5 rounded-2xl font-bold active:bg-gray-800"><Plus size={20} className="inline mr-2" /> 新增欄位</button>
+                      <button onClick={() => setEditPool(prev => [...prev, { id: `g${Date.now()}_${prev.length}`, item: '', chance: 0 }])} className="border-2 border-dashed border-gray-600 text-gray-400 p-5 rounded-2xl font-bold active:bg-gray-800"><Plus size={20} className="inline mr-2" /> 新增欄位</button>
                       <div className="flex gap-3 mt-4">
                         <button onClick={() => setIsEditingShop(false)} className="flex-1 bg-gray-800 text-gray-300 p-5 rounded-2xl font-black text-lg active:scale-95">取消</button>
                         <button onClick={() => {
                           if (editPool.length === 0) return showToast("必須至少有一個獎勵選項！", "error");
-                          if (editPool.find(p => p.item.trim() === '')) return showToast("獎勵名稱不能為空！", "error");
-                          const totalChance = editPool.reduce((sum, item) => sum + Number(item.chance || 0), 0);
-                          if (totalChance !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
+                          if (editPool.some(p => !String(p.item || '').trim())) return showToast("獎勵名稱不能為空！", "error");
+                          if (editPool.some(p => !Number.isFinite(Number(p.chance)) || Number(p.chance) <= 0 || Number(p.chance) > 100)) {
+                            return showToast("每個項目的機率必須介於 1% 到 100% 之間！", "error");
+                          }
+                          const normalizedPool = editPool.map((p, idx) => ({
+                            ...p,
+                            id: p.id || `g_${idx}`,
+                            item: String(p.item).trim(),
+                            chance: Number(p.chance)
+                          }));
+                          const totalChance = normalizedPool.reduce((sum, item) => sum + item.chance, 0);
+                          if (Math.round(totalChance * 1000) / 1000 !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
 
                           if (playerData.isGachaLocked) {
                             if ((playerData.gold || 0) < 1000) { setBtnShake(true); setTimeout(() => setBtnShake(false), 500); return showToast("金幣不足！修改需要 1000 G。", "error"); }
-                            saveGame({ ...playerData, gachaPool: editPool, gold: playerData.gold - 1000 });
+                            saveGame({ ...playerData, gachaPool: normalizedPool, gold: playerData.gold - 1000 });
                             setIsEditingShop(false); showToast("修改成功！已扣除 1000 G。", "success");
                           } else {
-                            saveGame({ ...playerData, gachaPool: editPool, isGachaLocked: true });
+                            saveGame({ ...playerData, gachaPool: normalizedPool, isGachaLocked: true });
                             setIsEditingShop(false); showToast("設定已儲存並鎖定！", "success");
                           }
                         }} className={`flex-1 text-white p-5 rounded-2xl font-black text-lg active:scale-95 ${btnShake ? 'animate-[shake-error_0.4s_ease-in-out] bg-red-500' : 'bg-green-600 shadow-[0_0_15px_rgba(22,163,74,0.5)]'}`}>
@@ -1274,6 +2332,85 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* 天井核心商店 Modal */}
+            {showCoreShop && (
+              <div className="absolute inset-0 z-40 bg-black/95 backdrop-blur-md flex flex-col p-5 animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-3 shrink-0">
+                  <h3 className="font-black text-xl text-rose-400 flex items-center gap-2"><Hexagon /> 資料核心黑市 (天井兌換)</h3>
+                  <button onClick={() => setShowCoreShop(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full"><X size={20}/></button>
+                </div>
+                <div className="text-xs text-gray-400 mb-3 bg-gray-900 p-3 rounded-lg border border-gray-800 shrink-0 flex justify-between items-center gap-2">
+                  <span>重複裝備轉化為資料核心，可免除隨機性直接補齊圖鑑與套裝！</span>
+                  <span className="text-rose-300 font-black bg-rose-950 px-2.5 py-1 rounded border border-rose-800 shrink-0">持有 {playerData.dataCores || 0} 核心</span>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3">
+                  {VIRTUAL_GACHA_POOL.map((item, i) => {
+                    const cost = getCoreCost(item.rarity);
+                    const isOwned = (playerData.inventory || []).some(inv => inv?.id === item.id);
+                    return (
+                      <div key={item.id || i} className="bg-gray-900 border border-gray-800 p-3 rounded-xl flex justify-between items-center gap-3">
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black shrink-0 ${getRarityConfig(item.rarity).badge}`}>{item.rarity}</span>
+                            <span className={`font-bold truncate ${getRarityConfig(item.rarity).color}`}>{item.item}</span>
+                          </div>
+                          {item.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 {item.buff}</span>}
+                          {item.desc && <span className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">「{item.desc}」</span>}
+                        </div>
+                        <button
+                          disabled={isOwned || (playerData.dataCores || 0) < cost}
+                          onClick={() => handleExchangeCore(item)}
+                          className={`px-3 py-2 rounded-lg font-black text-xs shrink-0 ${isOwned ? 'bg-gray-800 text-gray-500' : 'bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-40'}`}
+                        >
+                          {isOwned ? '已擁有' : `${cost} 核心兌換`}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 卡池詳情 Modal */}
+            {showGachaDetails && (
+              <div className="absolute inset-0 z-40 bg-black/90 backdrop-blur-sm flex flex-col p-6 animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-4 shrink-0">
+                  <h3 className={`font-black text-xl ${showGachaDetails === 'virtual' ? 'text-blue-400' : 'text-yellow-400'}`}>
+                    {showGachaDetails === 'virtual' ? '💠 裝備卡池詳情（全 33 件收藏）' : '🎁 實體卡池詳情'}
+                  </h3>
+                  <button onClick={() => setShowGachaDetails(false)} className="text-gray-400 bg-gray-800 p-2 rounded-full hover:text-white"><X size={20}/></button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-6">
+                  {[...(showGachaDetails === 'virtual' ? VIRTUAL_GACHA_POOL : (playerData.gachaPool || DEFAULT_GACHA_POOL))].sort((a,b)=>Number(a.chance)-Number(b.chance)).map((p, i) => {
+                    const itemRarity = p.rarity || (Number(p.chance) <= 9 ? 'SSR' : (Number(p.chance) <= 35 ? 'R' : 'N'));
+                    const cfg = getRarityConfig(itemRarity);
+                    const isVirtual = showGachaDetails === 'virtual';
+                    const isOwned = isVirtual && (playerData.inventory || []).some(inv => inv?.id === p.id);
+                    const isUp = isVirtual && BANNER_THEMES[activeBannerIdx]?.featuredSet && BANNER_THEMES[activeBannerIdx].featuredSet === p.set && (itemRarity === 'SSR' || itemRarity === 'UR');
+                    return (
+                      <div key={p.id || i} className={`flex justify-between items-center bg-gray-800/80 p-3.5 rounded-xl border shadow-sm gap-2 ${isUp ? 'border-amber-400/70' : 'border-gray-700'}`}>
+                        <div className="flex items-start gap-2.5 overflow-hidden min-w-0">
+                          <span className={`text-xs px-2 py-1 rounded font-black shrink-0 mt-0.5 ${cfg.badge}`}>{itemRarity}</span>
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`font-bold text-sm sm:text-base ${cfg.color}`}>{p.item}</span>
+                              {isUp && <span className="text-[10px] bg-amber-500 text-black px-1.5 py-0.2 rounded font-black">UP!</span>}
+                              {isOwned && <span className="text-[10px] bg-emerald-900 text-emerald-300 border border-emerald-600/50 px-1.5 py-0.2 rounded font-bold">已收錄</span>}
+                            </div>
+                            {p.buff && <span className="text-[10px] text-yellow-300 mt-1">🔥 Buff: {p.buff}</span>}
+                            {p.desc && <span className="text-[11px] text-gray-400 mt-1 leading-snug">「{p.desc}」</span>}
+                          </div>
+                        </div>
+                        <span className="text-gray-300 font-black text-base shrink-0 ml-2">{p.chance}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="p-4 border-t border-gray-900 shrink-0 bg-gray-950">
                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
             </div>
@@ -1282,14 +2419,60 @@ export default function App() {
 
         {/* --- 錯誤日誌 --- */}
         {screen === 'records' && (
-          <div className="flex-1 p-4 flex flex-col">
-            <h2 className="text-orange-400 font-black text-2xl mb-6 flex items-center gap-2"><Database /> 錯誤日誌</h2>
-            <div className="overflow-y-auto flex-1 gap-4 flex flex-col pb-4">
+          <div className="flex-1 min-h-0 p-4 flex flex-col h-full">
+            <div className="flex items-center justify-between mb-6 gap-2 shrink-0">
+              <h2 className="text-orange-400 font-black text-2xl flex items-center gap-2"><Database /> 錯誤日誌</h2>
+              <button
+                onClick={() => startWaveRun('mistakes')}
+                disabled={(playerData.mistakes || []).length === 0}
+                className="bg-orange-600 hover:bg-orange-500 disabled:bg-gray-800 disabled:text-gray-600 text-white px-4 py-2 rounded-xl font-black text-sm flex items-center gap-1.5 shadow-lg active:scale-95 transition-transform"
+              >
+                <Flame size={16} /> 錯題特訓 ({(playerData.mistakes || []).length})
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 min-h-0 gap-4 flex flex-col pb-4">
               {(playerData.mistakes || []).length === 0 ? <div className="text-gray-500 text-center mt-10 font-bold">完美通關，尚無錯誤紀錄</div> : null}
               {(playerData.mistakes || []).map((m, i) => (
-                <div key={i} className="bg-gray-900 p-5 rounded-2xl border border-orange-900/40 shadow-sm">
-                  <div className="font-black text-xl mb-3 text-gray-200 leading-loose"><RubyText text={m.q} showRuby={true}/></div>
-                  <div className="text-base text-green-400 font-bold bg-green-950/30 px-3 py-2 rounded-lg inline-block border border-green-900/50 leading-loose">✅ <RubyText text={m.a} showRuby={true}/></div>
+                <div key={m.id || i} className="bg-gray-900 p-5 rounded-2xl border border-orange-900/40 shadow-sm flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-black text-xl text-gray-200 leading-loose flex-1"><RubyText text={m.q} showRuby={true}/></div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {tts.isSupported() && m.a && (
+                        <button
+                          type="button"
+                          onClick={() => tts.speakAnswer(m.a)}
+                          title="朗讀正解"
+                          className="p-2 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-cyan-700/50 text-cyan-300 active:scale-90 transition-transform"
+                        >
+                          <Volume2 size={16} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = (playerData.mistakes || []).filter((_, idx) => idx !== i);
+                          saveGame({ ...playerDataRef.current, mistakes: updated });
+                          showToast("已從錯誤日誌移除", "info");
+                        }}
+                        title="已掌握／移除"
+                        className="p-2 rounded-lg bg-gray-800 hover:bg-red-950 border border-gray-700 hover:border-red-700/60 text-gray-400 hover:text-red-400 active:scale-90 transition-transform"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="text-base text-green-400 font-bold bg-green-950/30 px-3 py-2 rounded-lg inline-block border border-green-900/50 leading-loose self-start">✅ <RubyText text={m.a} showRuby={true}/></div>
+                  {m.exp && (
+                    <div className="text-sm text-gray-300 bg-gray-800/80 p-3 rounded-xl leading-relaxed whitespace-pre-wrap">
+                      📝 <RubyText text={m.exp} showRuby={true} />
+                    </div>
+                  )}
+                  {(m.example || m.exampleZh) && (
+                    <div className="text-sm text-yellow-300 bg-yellow-950/20 p-3 rounded-xl border border-yellow-900/40 leading-loose">
+                      {m.example && <div>🗣️ <RubyText text={m.example} showRuby={true} /></div>}
+                      {m.exampleZh && <div className="text-xs text-gray-400 mt-1">{m.exampleZh}</div>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
