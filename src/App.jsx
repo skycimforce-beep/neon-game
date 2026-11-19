@@ -10,6 +10,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { BattleReportModal } from './components/BattleReportModal';
 import { CodexScreen } from './components/CodexScreen';
 import { CyberMonster } from './components/CyberMonster';
+import { BottomNav } from './components/BottomNav';
 import {
   DIFFICULTY_TIERS,
   getQuestionTier,
@@ -19,7 +20,7 @@ import {
   analyzeReadingPassage,
   computeSkillProfile
 } from './utils/learningProgress';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut } from 'lucide-react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut, SlidersHorizontal } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -82,6 +83,7 @@ export default function App() {
   const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [account, setAccount] = useState(null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
+  const [showMissionConfig, setShowMissionConfig] = useState(false);
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -1376,182 +1378,225 @@ export default function App() {
         {screen === 'login' && (
           <LoginScreen onLogin={handleLoginSuccess} />
         )}
-        {/* --- 主選單 --- */}
+        {/* --- 主選單 (Hero 主視覺舞台) --- */}
         {screen === 'menu' && (() => {
           const skillProfile = computeSkillProfile(playerData);
           const tierStats = getTierSummary(masteryObj);
           const nemesisPendingCount = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
+          const currentTierObj = DIFFICULTY_TIERS.find(t => t.id === difficultyTier) || DIFFICULTY_TIERS[0];
+          const currentModeObj = PRACTICE_MODES.find(m => m.id === practiceMode) || PRACTICE_MODES[0];
+          const checkedInToday = playerData.lastLoginDate === getLocalDateString();
 
           return (
-          <div className="flex-1 flex flex-col p-4 gap-3.5 justify-center">
-
-            <div className="bg-gray-900/80 p-4 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-3">
-              {/* 玩家階級與語感速度摘要 */}
-              <div className="flex items-center justify-between gap-2 bg-gray-950/80 p-2.5 rounded-xl border border-cyan-900/60">
+          <div className="flex-1 flex flex-col p-4 gap-3 justify-between relative">
+            {/* 頂部精簡狀態列：淨化進度 + 每日簽到 */}
+            <div className="bg-gray-900/75 backdrop-blur-sm p-3 rounded-2xl border border-cyan-900/60 flex flex-col gap-2 shadow-inner">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-xl shrink-0">{skillProfile.currentRank.badge}</span>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-xs font-black text-cyan-200 truncate">{skillProfile.currentRank.title}</span>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <div className="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${skillProfile.rankProgressPct}%` }} />
-                      </div>
-                      <span className="text-[10px] text-gray-400 font-bold">{skillProfile.xp} XP</span>
-                    </div>
-                  </div>
+                  <span className="text-xs font-black text-cyan-400 flex items-center gap-1">
+                    <Target size={14} /> 世界淨化 {purificationRate}%
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-bold">({masteredCount}/{TOTAL_ENEMIES})</span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {(playerData.bestAvgSpeed || 0) > 0 && (
-                    <span className="text-[10px] font-black text-amber-300 bg-amber-950/60 border border-amber-700/50 px-2 py-1 rounded-lg">
-                      ⚡ {playerData.bestAvgSpeed.toFixed(1)}s
-                    </span>
-                  )}
-                  {(playerData.nemesisSlainCount || 0) > 0 && (
-                    <span className="text-[10px] font-black text-rose-300 bg-rose-950/60 border border-rose-700/50 px-2 py-1 rounded-lg">
-                      ⚔️ {playerData.nemesisSlainCount}
-                    </span>
-                  )}
+                  <button
+                    onClick={() => setShowDetailedProgress(!showDetailedProgress)}
+                    className="text-[10px] text-cyan-400 hover:text-cyan-200 font-bold underline"
+                  >
+                    {showDetailedProgress ? '收合' : '詳情'}
+                  </button>
+                  <button
+                    onClick={handleDailyCheckIn}
+                    disabled={checkedInToday}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-black flex items-center gap-1 transition-all ${
+                      checkedInToday
+                        ? 'bg-gray-800 text-gray-400 border border-gray-700'
+                        : 'bg-emerald-600/80 hover:bg-emerald-500 text-white border border-emerald-400 animate-pulse'
+                    }`}
+                  >
+                    <CalendarCheck size={11} />
+                    {checkedInToday ? '已簽到' : '簽到 +200G'}
+                  </button>
                 </div>
               </div>
-
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-cyan-400 font-black text-sm tracking-wider">
-                  <span className="flex items-center gap-1"><Target size={16}/> 世界淨化進度</span>
-                  <span className="animate-pulse">{purificationRate}%</span>
-                </div>
-                <div className="h-3.5 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
-                  <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_cyan] rounded-full" style={{ width: `${purificationRate}%` }}></div>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <button onClick={() => setShowDetailedProgress(!showDetailedProgress)} className="text-[10px] text-cyan-500 hover:text-cyan-300 font-bold underline cursor-pointer">{showDetailedProgress ? '隱藏詳細資訊' : '詳細資訊'}</button>
-                  <div className="text-[10px] text-gray-500 font-bold">已掌握節點: {masteredCount} / {TOTAL_ENEMIES}</div>
-                </div>
-                {showDetailedProgress && (
-                  <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 text-xs text-gray-400 flex flex-col gap-1 mt-2 animate-in slide-in-from-top-2">
-                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
-                  </div>
-                )}
+              <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50">
+                <div className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-1000 shadow-[0_0_8px_cyan]" style={{ width: `${purificationRate}%` }} />
               </div>
-
-              {/* 當前啟用的套裝共鳴提示 */}
-              {activeSetBonus && (
-                <div className="bg-cyan-950/40 border border-cyan-600/50 p-2.5 rounded-xl flex items-center justify-between text-xs">
-                  <div className="flex flex-col">
-                    <span className="text-cyan-300 font-black flex items-center gap-1"><Layers size={14}/> {activeSetBonus.name}</span>
-                    <span className="text-gray-400 mt-0.5">{activeSetBonus.desc}</span>
-                  </div>
-                  <CheckCircle2 size={18} className="text-cyan-400 shrink-0"/>
+              {showDetailedProgress && (
+                <div className="bg-gray-950/90 p-2.5 rounded-lg border border-gray-800 text-[11px] text-gray-400 flex flex-col gap-1 mt-1 animate-in slide-in-from-top-2">
+                  <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
                 </div>
               )}
+            </div>
 
-              <div className="grid grid-cols-2 gap-2 text-sm text-center">
-                <div className="bg-gray-800/50 p-2 rounded text-red-300 border border-gray-700/50">攻 {playerData.atk || 10}</div>
-                <div className="bg-gray-800/50 p-2 rounded text-blue-300 border border-gray-700/50">防 {playerData.def || 5}</div>
+            {/* 中央 Hero 主視覺舞台：神經核心與階級徽章 */}
+            <div className="flex-1 flex flex-col items-center justify-center py-2 relative min-h-[190px]">
+              {/* Rotating Holographic Neural Core */}
+              <div className="relative flex items-center justify-center w-40 h-40">
+                <div className="absolute inset-0 rounded-full border border-dashed border-cyan-500/40" style={{ animation: 'ring-spin-right 22s linear infinite' }} />
+                <div className="absolute inset-3 rounded-full border-2 border-dotted border-emerald-400/35" style={{ animation: 'ring-spin-left 15s linear infinite' }} />
+                <div className="absolute inset-6 rounded-full bg-gradient-to-br from-cyan-950/90 via-gray-900 to-blue-950/90 border border-cyan-500/60 shadow-[0_0_35px_rgba(6,182,212,0.3)] flex flex-col items-center justify-center text-center p-2">
+                  <span className="text-3xl leading-none mb-1 drop-shadow-[0_0_12px_rgba(255,255,255,0.4)]">{skillProfile.currentRank.badge}</span>
+                  <span className="text-[11px] font-black text-cyan-200 leading-tight">{skillProfile.currentRank.title}</span>
+                  <span className="text-[10px] font-bold text-cyan-400/90 mt-0.5">{skillProfile.xp} XP</span>
+                </div>
               </div>
-              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-3.5 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
-                <CalendarCheck size={18} />
-                {playerData.lastLoginDate === getLocalDateString() ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
+
+              {/* XP Progress + Stat Micro Chips */}
+              <div className="w-full max-w-[260px] flex flex-col items-center gap-2 mt-2">
+                <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style={{ width: `${skillProfile.rankProgressPct}%` }} />
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-black">
+                  <span className="px-2 py-0.5 rounded bg-gray-900/90 border border-red-900/60 text-red-300">ATK {playerData.atk || 10}</span>
+                  <span className="px-2 py-0.5 rounded bg-gray-900/90 border border-blue-900/60 text-blue-300">DEF {playerData.def || 5}</span>
+                  {(playerData.bestAvgSpeed || 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-amber-950/70 border border-amber-700/60 text-amber-300">⚡ {playerData.bestAvgSpeed.toFixed(1)}s</span>
+                  )}
+                  {(playerData.nemesisSlainCount || 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-rose-950/70 border border-rose-700/60 text-rose-300">⚔️ {playerData.nemesisSlainCount}</span>
+                  )}
+                </div>
+              </div>
+
+              {activeSetBonus && (
+                <div className="mt-2 bg-cyan-950/50 border border-cyan-600/50 px-3 py-1.5 rounded-full flex items-center gap-1.5 text-[11px]">
+                  <Layers size={13} className="text-cyan-300 shrink-0" />
+                  <span className="text-cyan-200 font-black">{activeSetBonus.name}</span>
+                </div>
+              )}
+            </div>
+
+            {/* 出擊任務設定摘要 ＋ 主打 CTA */}
+            <div className="flex flex-col gap-2.5">
+              <div className="bg-gray-900/80 border border-gray-800 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                <div className="flex flex-col min-w-0">
+                  <div className="text-[10px] text-gray-400 font-bold flex items-center gap-1.5 flex-wrap">
+                    <span className="text-emerald-300 font-black">{currentTierObj.label}</span>
+                    <span>•</span>
+                    <span className="text-cyan-300 font-black">{currentModeObj.label}</span>
+                    {relaxedMode && <span className="text-emerald-400">• ☕休閒</span>}
+                    {vocabHintEnabled && <span className="text-cyan-400">• 💡提示</span>}
+                  </div>
+                  {nemesisPendingCount > 0 && (
+                    <span className="text-[10px] text-rose-400 font-bold mt-0.5">
+                      🔴 目前有 {nemesisPendingCount} 題宿敵潛伏於題庫中
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMissionConfig(true)}
+                  className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-cyan-800/70 text-cyan-200 text-xs font-black flex items-center gap-1 shrink-0 active:scale-95 transition-transform"
+                >
+                  <SlidersHorizontal size={13} /> 切換設定
+                </button>
+              </div>
+
+              <button
+                onClick={() => startWaveRun()}
+                className="relative group overflow-hidden bg-gradient-to-r from-cyan-900/80 via-cyan-800/80 to-blue-900/80 hover:from-cyan-700 hover:to-blue-700 border-2 border-cyan-400 p-4 rounded-2xl flex items-center justify-center gap-3 text-lg font-black text-white shadow-[0_0_25px_rgba(6,182,212,0.35)] active:scale-95 transition-all"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+                <Play size={22} fill="currentColor" /> 潛入戰鬥・{currentModeObj.label}
               </button>
+
+              {(playerData.mistakes || []).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => startWaveRun('mistakes')}
+                  className="w-full py-2.5 px-3 rounded-xl bg-orange-950/60 hover:bg-orange-900/60 border border-orange-600/60 text-orange-200 text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                >
+                  <Flame size={14} className="text-orange-400" /> 立即進行錯題特訓（{(playerData.mistakes || []).length} 題待攻克）
+                </button>
+              )}
             </div>
 
-            {/* 漸進式難度分級 */}
-            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={14}/> 難度階層篩選</span>
-                {nemesisPendingCount > 0 && (
-                  <span className="text-[10px] font-black text-rose-300 bg-rose-950/70 border border-rose-700/60 px-2 py-0.5 rounded-full">
-                    🔴 潛伏宿敵 {nemesisPendingCount} 題
-                  </span>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {DIFFICULTY_TIERS.map((t) => {
-                  const st = t.id === 'all' ? null : tierStats[Number(t.id)];
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => setDifficultyTier(t.id)}
-                      className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
-                    >
-                      <div className="flex justify-between items-center gap-1">
-                        <span className="text-[11px] font-black truncate">{t.label}</span>
-                        {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
-                      </div>
-                      <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
+            {/* 任務配置抽屜 Modal */}
+            {showMissionConfig && (
+              <div className="absolute inset-0 z-40 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-in fade-in duration-150">
+                <div className="bg-gray-900 border-t-2 border-cyan-500/70 rounded-t-3xl p-4 flex flex-col gap-3 max-h-[85vh] overflow-y-auto shadow-[0_-10px_40px_rgba(6,182,212,0.25)]">
+                  <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                    <span className="text-sm font-black text-cyan-300 flex items-center gap-1.5">
+                      <SlidersHorizontal size={16} /> 作戰任務配置
+                    </span>
+                    <button type="button" onClick={() => setShowMissionConfig(false)} className="p-1.5 rounded-full bg-gray-800 text-gray-400 hover:text-white">
+                      <X size={16} />
                     </button>
-                  );
-                })}
-              </div>
-            </div>
+                  </div>
 
-            {/* 訓練單元選擇 & 休閒模式／單字提示切換 */}
-            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
-              <div className="flex flex-wrap justify-between items-center gap-1.5">
-                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={14}/> 選擇練習單元</span>
-                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* 難度階層篩選 */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={13}/> 難度階層篩選</span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {DIFFICULTY_TIERS.map((t) => {
+                        const st = t.id === 'all' ? null : tierStats[Number(t.id)];
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => setDifficultyTier(t.id)}
+                            className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                          >
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-[11px] font-black truncate">{t.label}</span>
+                              {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
+                            </div>
+                            <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 練習單元 */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={13}/> 訓練單元模式</span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {PRACTICE_MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => setPracticeMode(m.id)}
+                          className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                        >
+                          <div>{m.label}</div>
+                          <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 輔助開關 */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleVocabHint}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-400 text-cyan-200' : 'bg-gray-950 border-gray-800 text-gray-400'}`}
+                    >
+                      {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRelaxedMode(!relaxedMode)}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200' : 'bg-gray-950 border-gray-800 text-gray-400'}`}
+                    >
+                      {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準計時模式'}
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={toggleVocabHint}
-                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-500 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                    onClick={() => { setShowMissionConfig(false); startWaveRun(); }}
+                    className="w-full py-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
                   >
-                    {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
-                  </button>
-                  <button
-                    onClick={() => setRelaxedMode(!relaxedMode)}
-                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
-                  >
-                    {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準模式'}
+                    <Play size={16} fill="currentColor" /> 套用設定並開始「{currentModeObj.label}」
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {PRACTICE_MODES.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setPracticeMode(m.id)}
-                    className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
-                  >
-                    <div>{m.label}</div>
-                    <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-4 rounded-xl flex items-center justify-center gap-3 text-lg font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
-              <Play size={24} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
-            </button>
-            
-            <div className="grid grid-cols-2 gap-2.5">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                {(() => {
-                  const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
-                  const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
-                  return claimable > 0 ? (
-                    <span className="absolute -top-1.5 -right-1.5 bg-amber-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full animate-bounce">
-                      領獎!
-                    </span>
-                  ) : null;
-                })()}
-                <Backpack size={18} className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
-              </button>
-              <button onClick={() => setScreen('codex')} className="bg-emerald-900/30 border border-emerald-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                <Brain size={18} className="text-emerald-400"/> <span className="text-xs font-bold">能力圖鑑</span>
-              </button>
-              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                <ShoppingCart size={18} className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
-              </button>
-              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                {(playerData.mistakes || []).length > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full">{(playerData.mistakes || []).length}</span>
-                )}
-                <Database size={18} className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
-              </button>
-            </div>
+            )}
           </div>
           );
         })()}
@@ -2424,10 +2469,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            <div className="p-4 border-t border-gray-900 shrink-0 bg-gray-950">
-               <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
           </div>
         )}
 
@@ -2490,12 +2531,31 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div className="pt-4 border-t border-gray-900 mt-auto shrink-0">
-              <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
           </div>
         )}
       </main>
+
+      {screen !== 'login' && screen !== 'battle' && (() => {
+        const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
+        const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
+        const nemesisPending = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
+        return (
+          <BottomNav
+            screen={screen}
+            onNavigate={(nextScreen) => {
+              setShowMissionConfig(false);
+              if (nextScreen === 'shop') {
+                setShopTab('gacha');
+                setIsEditingShop(false);
+              }
+              setScreen(nextScreen);
+            }}
+            claimableMilestones={claimable}
+            mistakeCount={(playerData.mistakes || []).length}
+            nemesisCount={nemesisPending}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { RubyText } from './RubyText';
 import { tts } from '../utils/tts';
 import { computeSkillProfile, getAllCodexEntries, getMasteryStage, stripRuby } from '../utils/learningProgress';
 
-export const CodexScreen = ({ playerData, onBack }) => {
+export const CodexScreen = ({ playerData, onBack, hideBack = false }) => {
   const [activeTab, setActiveTab] = useState('skills');
   const [stageFilter, setStageFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -307,11 +307,13 @@ export const CodexScreen = ({ playerData, onBack }) => {
         </div>
       )}
 
-      <div className="pt-3 border-t border-gray-900 shrink-0 mt-auto">
-        <button onClick={onBack} className="w-full bg-gray-800 hover:bg-gray-700 p-4 rounded-2xl font-black text-base active:scale-95 transition-transform">
-          返回終端機
-        </button>
-      </div>
+      {!hideBack && (
+        <div className="pt-3 border-t border-gray-900 shrink-0 mt-auto">
+          <button onClick={onBack} className="w-full bg-gray-800 hover:bg-gray-700 p-4 rounded-2xl font-black text-base active:scale-95 transition-transform">
+            返回終端機
+          </button>
+        </div>
+      )}
     </div>
   );
 };
