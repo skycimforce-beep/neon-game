@@ -18,7 +18,7 @@ import {
   analyzeReadingPassage,
   computeSkillProfile
 } from './utils/learningProgress';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords } from 'lucide-react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -62,10 +62,24 @@ const PRACTICE_MODES = [
   { id: 'reading', label: '閱讀理解', desc: '長文閱讀分析' }
 ];
 
+const createDefaultPlayerData = () => ({
+  hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
+  critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
+  gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
+  inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
+  pityCount: 0,
+  dataCores: 0,
+  claimedMilestones: [],
+  bestAvgSpeed: 0,
+  lastAvgSpeed: 0,
+  nemesisSlainCount: 0,
+  mistakeCounts: {}
+});
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [isAuthResolved, setIsAuthResolved] = useState(false);
-  const [callsign, setCallsign] = useState(null);
+  const [account, setAccount] = useState(null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
@@ -73,23 +87,28 @@ export default function App() {
   const [practiceMode, setPracticeMode] = useState('mixed');
   const [difficultyTier, setDifficultyTier] = useState('all');
   const [relaxedMode, setRelaxedMode] = useState(false);
+  const [vocabHintEnabled, setVocabHintEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('neon_game_vocab_hint') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [showTranslationHint, setShowTranslationHint] = useState(false);
   const [peekVocabWord, setPeekVocabWord] = useState(null);
   const [battleReport, setBattleReport] = useState(null);
+
+  const toggleVocabHint = () => {
+    setVocabHintEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('neon_game_vocab_hint', String(next));
+      } catch { /* ignore storage errors */ }
+      return next;
+    });
+  };
   
-  const [playerData, setPlayerData] = useState({
-    hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-    critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
-    gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
-    inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
-    pityCount: 0,
-    dataCores: 0,
-    claimedMilestones: [],
-    bestAvgSpeed: 0,
-    lastAvgSpeed: 0,
-    nemesisSlainCount: 0,
-    mistakeCounts: {}
-  });
+  const [playerData, setPlayerData] = useState(createDefaultPlayerData);
   const playerDataRef = useRef(playerData);
   useEffect(() => { playerDataRef.current = playerData; }, [playerData]);
 
@@ -363,11 +382,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!callsign || !isAuthResolved) return;
+    if (!account?.key || !isAuthResolved) return;
 
     // Load local backup immediately to avoid blocking
     try {
-      const localRaw = localStorage.getItem(`neon_game_save_${callsign}`);
+      const localRaw = localStorage.getItem(`neon_game_save_${account.key}`);
       if (localRaw) {
         const localData = JSON.parse(localRaw);
         const mergedLocal = {
@@ -394,7 +413,7 @@ export default function App() {
 
     setIsLoading(true);
     const safetyTimer = setTimeout(() => setIsLoading(false), 4000);
-    const docRef = doc(db, 'saves', `${SAVE_ID}_${callsign}`);
+    const docRef = doc(db, 'saves', `${SAVE_ID}_${account.key}`);
     const unsubscribe = onSnapshot(
       docRef,
       (snapshot) => {
@@ -430,7 +449,7 @@ export default function App() {
           playerDataRef.current = merged;
           setPlayerData(merged);
           try {
-            localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(merged));
+            localStorage.setItem(`neon_game_save_${account.key}`, JSON.stringify(merged));
           } catch { /* ignore storage errors */ }
         }
         setIsLoading(false);
@@ -445,20 +464,24 @@ export default function App() {
       clearTimeout(safetyTimer);
       unsubscribe();
     };
-  }, [callsign, isAuthResolved, user]);
+  }, [account?.key, isAuthResolved, user]);
 
   const saveGame = async (newData) => {
-    const stampedData = { ...newData, updatedAt: Date.now() };
+    const stampedData = {
+      ...newData,
+      ...(account ? { accountMode: account.mode, accountValue: account.value } : {}),
+      updatedAt: Date.now()
+    };
     playerDataRef.current = stampedData;
     setPlayerData(stampedData);
-    if (callsign) {
+    if (account?.key) {
       try {
-        localStorage.setItem(`neon_game_save_${callsign}`, JSON.stringify(stampedData));
+        localStorage.setItem(`neon_game_save_${account.key}`, JSON.stringify(stampedData));
       } catch { /* ignore storage errors */ }
     }
-    if (callsign && db && user) {
+    if (account?.key && db && user) {
       try {
-        await setDoc(doc(db, 'saves', `${SAVE_ID}_${callsign}`), stampedData, { merge: true });
+        await setDoc(doc(db, 'saves', `${SAVE_ID}_${account.key}`), stampedData, { merge: true });
       } catch (err) {
         console.error("Cloud save failed, kept in localStorage:", err);
       }
@@ -543,9 +566,23 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
-  const handleLoginSuccess = (enteredCallsign) => {
-    setCallsign(enteredCallsign);
+  const handleLoginSuccess = (enteredAccount) => {
+    const freshDefault = createDefaultPlayerData();
+    playerDataRef.current = freshDefault;
+    setPlayerData(freshDefault);
+    setAccount(enteredAccount);
     setScreen('menu');
+  };
+
+  const handleLogout = () => {
+    clearAnswerTimer();
+    tts.stop();
+    const freshDefault = createDefaultPlayerData();
+    playerDataRef.current = freshDefault;
+    setPlayerData(freshDefault);
+    setBattleReport(null);
+    setAccount(null);
+    setScreen('login');
   };
 
   const handleNext = (newHp, requeuedCurrent = false) => {
@@ -1298,12 +1335,27 @@ export default function App() {
 
       {/* --- Header --- */}
       <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
-        <div className="flex justify-between items-center text-sm">
-          <div className="flex flex-col">
+        <div className="flex justify-between items-center text-sm gap-2">
+          <div className="flex flex-col min-w-0">
             <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
-            {callsign && <span className="text-xs text-gray-500 font-mono">CALLSIGN: {callsign}</span>}
+            {account && (
+              <div className="flex items-center gap-1.5 text-xs text-gray-400 font-mono min-w-0">
+                {account.mode === 'email' ? <Mail size={11} className="text-cyan-500 shrink-0" /> : <Smartphone size={11} className="text-cyan-500 shrink-0" />}
+                <span className="truncate max-w-[160px]">{account.value}</span>
+                {screen !== 'battle' && screen !== 'login' && (
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    title="切換帳號"
+                    className="text-[10px] text-cyan-400 hover:text-cyan-200 underline flex items-center gap-0.5 shrink-0"
+                  >
+                    <LogOut size={10} /> 切換
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button onClick={() => { const next = !soundEnabled; setSoundEnabled(next); sfx.enabled = next; tts.enabled = next; if (!next) tts.stop(); }} className="text-gray-400 hover:text-white p-1" title="切換音效與日語發音">
               {soundEnabled ? <Volume2 size={16}/> : <VolumeX size={16}/>}
             </button>
@@ -1435,16 +1487,25 @@ export default function App() {
               </div>
             </div>
 
-            {/* 訓練單元選擇 & 休閒模式切換 */}
+            {/* 訓練單元選擇 & 休閒模式／單字提示切換 */}
             <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap justify-between items-center gap-1.5">
                 <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={14}/> 選擇練習單元</span>
-                <button
-                  onClick={() => setRelaxedMode(!relaxedMode)}
-                  className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
-                >
-                  {relaxedMode ? '☕ 休閒學習：不限時 / 失誤僅扣5HP' : '⏱️ 標準模式 (點擊切換休閒)'}
-                </button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={toggleVocabHint}
+                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-500 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                  >
+                    {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
+                  </button>
+                  <button
+                    onClick={() => setRelaxedMode(!relaxedMode)}
+                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                  >
+                    {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準模式'}
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-3 gap-1.5">
                 {PRACTICE_MODES.map((m) => (
@@ -1798,11 +1859,32 @@ export default function App() {
                          </button>
                        )}
                      </div>
-                     <div className="min-h-[24px] flex justify-center mb-4">
-                       {currentLv === 0 && combatUI.data.vocabMode === 'reading' && combatUI.data.answers?.[0] && (
-                         <span className="text-[11px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/50 px-3 py-0.5 rounded-full">
-                           💡 輔助提示：讀音共 {combatUI.data.answers[0].length} 個假名
-                         </span>
+                     <div className="min-h-[28px] flex justify-center mb-4 px-2">
+                       {currentLv === 0 && (
+                         vocabHintEnabled ? (
+                           <button
+                             type="button"
+                             onClick={toggleVocabHint}
+                             className="text-[11px] font-bold text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/60 px-3 py-1 rounded-full flex items-center gap-1.5 active:scale-95 transition-all max-w-full"
+                           >
+                             {combatUI.data.vocabMode === 'reading' && combatUI.data.answers?.[0] ? (
+                               <span>💡 輔助提示：讀音共 {combatUI.data.answers[0].length} 個假名</span>
+                             ) : (
+                               <span className="truncate">
+                                 💡 語境線索：{combatUI.data.example ? <RubyText text={combatUI.data.example} showRuby={true} /> : '請依假名辨識詞意'}
+                               </span>
+                             )}
+                             <span className="text-[10px] text-emerald-400/80 underline shrink-0">隱藏</span>
+                           </button>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={toggleVocabHint}
+                             className="text-[11px] font-bold text-gray-300 bg-gray-900/80 hover:bg-gray-800 border border-gray-700 px-3 py-1 rounded-full flex items-center gap-1.5 active:scale-95 transition-all"
+                           >
+                             <Eye size={12} className="text-emerald-400" /> 💡 初見輔助提示：關閉（點擊開啟）
+                           </button>
+                         )
                        )}
                        {currentLv >= 2 && (
                          <span className="text-[11px] font-bold text-amber-300/90 bg-amber-950/40 border border-amber-700/40 px-3 py-0.5 rounded-full">
@@ -1813,7 +1895,7 @@ export default function App() {
                      <div className={`grid gap-3 ${combatUI.data.vocabMode === 'meaning' ? 'grid-cols-1' : 'grid-cols-2'}`}>
                        {(combatUI.data.options || []).map((opt, i) => (
                          <button key={i} onClick={() => handleVocabClick(opt)} className={`bg-gray-800 border-2 border-cyan-900 p-4 sm:p-5 rounded-xl active:bg-cyan-900 active:scale-95 transition-transform font-bold ${combatUI.data.vocabMode === 'meaning' ? 'text-base sm:text-lg text-left' : 'text-xl text-center'}`}>
-                           <RubyText text={opt} showRuby={currentLv === 0} />
+                           <RubyText text={opt} showRuby={currentLv === 0 && vocabHintEnabled} />
                          </button>
                        ))}
                      </div>
