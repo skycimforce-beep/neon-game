@@ -166,6 +166,7 @@ export default function App() {
   const [damageNumbers, setDamageNumbers] = useState([]);
   const [combatFx, setCombatFx] = useState(null);
   const [screenShake, setScreenShake] = useState(false);
+  const [flashCutIn, setFlashCutIn] = useState(null);
 
   const showToast = (message, type = 'info') => { setToast({ visible: true, message, type }); setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000); };
   const triggerDamageNumber = (amount, isCrit, isHeal = false) => {
@@ -175,6 +176,11 @@ export default function App() {
   };
   const triggerFx = (type) => { setCombatFx(type); setTimeout(() => setCombatFx(null), 500); };
   const triggerScreenShake = () => { setScreenShake(true); setTimeout(() => setScreenShake(false), 300); };
+  const triggerFlashCutIn = (sec) => {
+    const id = Date.now();
+    setFlashCutIn({ id, sec });
+    setTimeout(() => setFlashCutIn(prev => (prev?.id === id ? null : prev)), 900);
+  };
 
   const TOTAL_ENEMIES = VALID_ENEMY_IDS.size;
   const masteryObj = playerData.mastery || {};
@@ -735,6 +741,7 @@ export default function App() {
           runStatsRef.current.flashCount += 1;
           runStatsRef.current.bonusGold += 5;
           pData.gold = (pData.gold || 0) + 5;
+          triggerFlashCutIn(responseSec.toFixed(1));
           showToast(`⚡ 神速直覺 (${responseSec.toFixed(1)}s)！+5 G`, "success");
         }
         if (waveState.currentIndex === 0 && !waveState.firstBonusUsed && equippedSkin?.id === 'skin_cyber') {
@@ -1343,6 +1350,21 @@ export default function App() {
         </div>
       </div>
 
+      {/* --- 神速直覺 Cut-in 橫幅 --- */}
+      {flashCutIn && (
+        <div
+          key={flashCutIn.id}
+          className="absolute top-28 inset-x-0 z-[90] pointer-events-none flex justify-center overflow-hidden"
+        >
+          <div
+            className="w-full py-2 px-4 bg-gradient-to-r from-amber-500/95 via-yellow-400/95 to-cyan-400/95 text-black font-black text-xs sm:text-sm tracking-widest uppercase shadow-[0_0_25px_rgba(251,191,36,0.8)] border-y-2 border-white flex items-center justify-center gap-2 font-cyber"
+            style={{ animation: 'cut-in-sweep 0.88s ease-out forwards' }}
+          >
+            <Zap size={15} fill="currentColor" /> FLASH READ // 神速直覺 {flashCutIn.sec}s <Zap size={15} fill="currentColor" />
+          </div>
+        </div>
+      )}
+
       {/* --- 抽卡動態展示 (支援 10 連與變色昇格) --- */}
       <GachaModal
         gachaState={gachaState}
@@ -1517,7 +1539,7 @@ export default function App() {
 
               <button
                 onClick={() => startWaveRun()}
-                className="relative group overflow-hidden bg-gradient-to-r from-cyan-900/80 via-cyan-800/80 to-blue-900/80 hover:from-cyan-700 hover:to-blue-700 border-2 border-cyan-400 p-4 rounded-2xl flex items-center justify-center gap-3 text-lg font-black text-white shadow-[0_0_25px_rgba(6,182,212,0.35)] active:scale-95 transition-all"
+                className="relative group overflow-hidden cyber-chamfer bg-gradient-to-r from-cyan-900/90 via-cyan-800/90 to-blue-900/90 hover:from-cyan-700 hover:to-blue-700 border-2 border-cyan-400 p-4 flex items-center justify-center gap-3 text-lg font-black text-white shadow-[0_0_25px_rgba(6,182,212,0.35)] active:scale-95 transition-all"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
                 <Play size={22} fill="currentColor" /> 潛入戰鬥・{currentModeObj.label}
@@ -1824,17 +1846,13 @@ export default function App() {
                 </div>
 
               </div>
-
-              <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
-                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-              </div>
             </div>
           );
         })()}
 
         {/* --- 日語能力樹＆圖鑑 --- */}
         {screen === 'codex' && (
-          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} />
+          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} hideBack={true} />
         )}
 
         {/* --- 戰鬥畫面 --- */}
@@ -1849,9 +1867,9 @@ export default function App() {
 
            return (
            <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-2">
-                 <span className="font-bold text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
+                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
                  <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
                <button onClick={() => setIsPaused(true)} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
@@ -1874,7 +1892,7 @@ export default function App() {
              )}
 
              <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
-               {combo > 1 && (<div className={`font-black italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
+               {combo > 1 && (<div className={`font-black font-cyber italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
              </div>
 
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>

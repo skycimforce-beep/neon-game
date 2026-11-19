@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Brain, BookOpen, Award, Zap, Swords, Search, Volume2, Layers } from 'lucide-react';
 import { RubyText } from './RubyText';
+import { SkillRadarChart } from './SkillRadarChart';
 import { tts } from '../utils/tts';
 import { computeSkillProfile, getAllCodexEntries, getMasteryStage, stripRuby } from '../utils/learningProgress';
 
@@ -135,9 +136,10 @@ export const CodexScreen = ({ playerData, onBack, hideBack = false }) => {
             </div>
           </div>
 
-          {/* 五大核心能力條 */}
+          {/* 五大核心能力條 + 雷達圖 */}
           <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex flex-col gap-3">
             <div className="text-xs font-black text-cyan-300">📊 五大日語實戰能力維度</div>
+            <SkillRadarChart coreSkills={profile.coreSkills} size={220} />
             {profile.coreSkills.map((skill) => (
               <div key={skill.key} className="flex flex-col gap-1">
                 <div className="flex justify-between text-xs font-bold">

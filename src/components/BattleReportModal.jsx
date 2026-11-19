@@ -1,5 +1,6 @@
 import { Brain, Zap, Trophy, Coins, CheckCircle2, Swords } from 'lucide-react';
 import { RubyText } from './RubyText';
+import { SkillRadarChart } from './SkillRadarChart';
 
 export const BattleReportModal = ({ report, onClose }) => {
   if (!report) return null;
@@ -89,6 +90,11 @@ export const BattleReportModal = ({ report, onClose }) => {
               {rankInfo.nextRank && (
                 <div className="text-[10px] text-gray-400 text-right">
                   距離「{rankInfo.nextRank.title}」還差 {Math.max(0, rankInfo.nextRank.minXp - rankInfo.xp)} XP
+                </div>
+              )}
+              {rankInfo.coreSkills && (
+                <div className="pt-2 mt-1 border-t border-cyan-900/40">
+                  <SkillRadarChart coreSkills={rankInfo.coreSkills} size={185} />
                 </div>
               )}
             </div>
