@@ -9,6 +9,7 @@ import { GachaModal } from './components/GachaModal';
 import { LoginScreen } from './components/LoginScreen';
 import { BattleReportModal } from './components/BattleReportModal';
 import { CodexScreen } from './components/CodexScreen';
+import { CyberMonster } from './components/CyberMonster';
 import {
   DIFFICULTY_TIERS,
   getQuestionTier,
@@ -1814,20 +1815,33 @@ export default function App() {
              </div>
 
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[150px]">
-                 {renderVFX()}
-
-                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${isNemesis ? 'bg-rose-950 border-rose-500 text-rose-400 animate-pulse drop-shadow-[0_0_20px_rgba(244,63,94,0.6)]' : (waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400')}`}>
-                   {renderMonsterEmoji()}
-                   {damageNumbers.map(d => (
-                     <div key={d.id} className={`absolute font-black pointer-events-none drop-shadow-md flex items-center gap-1 ${d.isHeal ? 'text-green-400 text-3xl' : (d.isCrit ? 'text-yellow-400 text-4xl' : 'text-white text-2xl')}`} style={{ left: `calc(50% + ${d.offsetX}px)`, top: '10%', animation: 'damage-float 1s ease-out forwards' }}>
-                       {d.isCrit && '💥'} {d.amount}
-                     </div>
-                   ))}
-                 </div>
+               <div className="relative flex flex-col items-center justify-center my-auto min-h-[165px]">
+                 {(() => {
+                   const isHitNow = Boolean(combatFx && combatFx !== 'heal');
+                   const monsterHpPercent = combatUI.type === 'reading'
+                     ? (() => {
+                         const totalQ = combatUI.data.questions?.length || 1;
+                         const remaining = Math.max(0, totalQ - combatUI.readingStep - (isHitNow ? 1 : 0));
+                         return (remaining / totalQ) * 100;
+                       })()
+                     : (isHitNow ? 0 : 100);
+                   return (
+                     <CyberMonster
+                       type={combatUI.type}
+                       isBoss={waveState.currentWave === 3}
+                       isNemesis={isNemesis}
+                       equippedSkin={equippedSkin}
+                       hpPercent={monsterHpPercent}
+                       isHit={isHitNow}
+                       isHealed={combatFx === 'heal'}
+                       damageNumbers={damageNumbers}
+                       vfxOverlay={renderVFX()}
+                     />
+                   );
+                 })()}
 
                  {equippedSkin?.battleQuip && (
-                   <div className="mt-2 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
+                   <div className="mt-1 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
                      {equippedSkin.battleQuip}
                    </div>
                  )}
