@@ -202,16 +202,16 @@ export const CyberMonster = ({
           )}
         </div>
 
-        {/* Floating Damage / Heal Numbers */}
+        {/* Floating Bounty / Shield Popups */}
         {damageNumbers.map((d) => (
           <div
             key={d.id}
-            className={`absolute z-20 font-black pointer-events-none drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] flex items-center gap-1 ${
-              d.isHeal ? 'text-emerald-400 text-3xl' : (d.isCrit ? 'text-amber-300 text-4xl' : 'text-white text-2xl')
+            className={`absolute z-20 font-black font-cyber pointer-events-none drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)] whitespace-nowrap flex items-center gap-1 ${
+              d.isHeal ? 'text-emerald-400 text-2xl' : (d.isCrit ? 'text-amber-300 text-3xl' : 'text-cyan-200 text-xl')
             }`}
-            style={{ left: `calc(50% + ${d.offsetX}px)`, top: '6%', animation: 'damage-float 1s ease-out forwards' }}
+            style={{ left: `calc(50% + ${d.offsetX}px)`, top: '6%', transform: 'translateX(-50%)', animation: 'damage-float 1s ease-out forwards' }}
           >
-            {d.isCrit && '💥'} {d.amount}
+            {d.label || `${d.isCrit ? '⚡ ' : ''}${d.amount}`}
           </div>
         ))}
       </div>

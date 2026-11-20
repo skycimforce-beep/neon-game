@@ -32,7 +32,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'chip',
-    buff: '答對時回復 5 點 HP',
+    buff: '答對時回復 5 點護盾',
     icon: '🍃',
     desc: '一邊賞櫻一邊默背「〜てみる」，優雅得像日劇主角（雖然文法還是常背錯）。'
   },
@@ -96,7 +96,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'vfx',
-    buff: 'Combo 2 以上傷害 +25%',
+    buff: 'Combo 2 以上答對額外 +6 G',
     vfxClass: 'bg-amber-500 drop-shadow-[0_0_25px_#f59e0b]',
     extra: '☕',
     desc: '凌晨兩點灌下第三罐販賣機無糖黑咖啡，眼皮跟五段動詞一起劇烈顫抖！'
@@ -108,7 +108,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'chip',
-    buff: 'HP 低於 50% 時爆擊率 +35%',
+    buff: '護盾低於 50% 時答對額外 +12 G（絕地賞金）',
     icon: '⏰',
     desc: '「明天就要考 N4 了今晚才開始翻課本！」人類在死線前的潛能是平常的 300%。'
   },
@@ -121,7 +121,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'skin',
-    buff: '閱讀測驗每小題答對 +20 G',
+    buff: '閱讀測驗通關額外 +20 G',
     emoji: '🐙',
     bossEmoji: '🏮',
     battleQuip: '「アツッ！太燙了！答錯就噴你一臉柴魚片！」',
@@ -134,7 +134,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'vfx',
-    buff: '藥水題回復量提升至 1.5 倍',
+    buff: '藥水題護盾回復量提升至 1.5 倍',
     vfxClass: 'bg-yellow-300 drop-shadow-[0_0_25px_#fde047]',
     extra: '🍻',
     desc: '「とりあえず生で！」進居酒屋第一句只會點生啤，但靠這句就夠在東京活下來。'
@@ -146,7 +146,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'chip',
-    buff: '每進入下一波自動回復 8 HP',
+    buff: '每進入下一波自動回復 8 點護盾',
     icon: '🍢',
     desc: '吃到飽的靈魂在於回本；背單字的靈魂在於今天背完明天至少還記得一半。'
   },
@@ -159,7 +159,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 0.5,
     rarity: 'UR',
     type: 'chip',
-    buff: '答題傷害 +40%，每 3 連擊額外回 10 HP',
+    buff: '答對題目 +10 G，每 3 連擊額外回復 10 護盾',
     icon: '🍜',
     desc: '在等日清泡麵熟透的 180 秒內剛好刷完一波題目！麵糊掉前必須全對通關！'
   },
@@ -170,7 +170,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'skin',
-    buff: '爆擊傷害提升至 2.6 倍',
+    buff: '觸發神速直覺或 3 連擊以上時額外 +8 G',
     emoji: '🐈',
     bossEmoji: '🦁',
     battleQuip: '「ニャー！（翻譯：你這個助詞又放錯了喵）」',
@@ -183,7 +183,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 1.5,
     rarity: 'SSR',
     type: 'vfx',
-    buff: '動詞變化與文法重組傷害 +30%',
+    buff: '動詞變化與文法重組答對額外 +10 G',
     vfxClass: 'bg-fuchsia-500 drop-shadow-[0_0_28px_#d946ef]',
     extra: '🔥',
     desc: '「漆黒の炎に抱かれて消えろ！」聽得懂這句中二台詞的人，N4 應該都能輕鬆過吧？'
@@ -197,7 +197,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 0.5,
     rarity: 'UR',
     type: 'chip',
-    buff: '單場作戰免死 1 次 (保留 1 HP)',
+    buff: '單場免除護盾歸零 1 次（強制保留 1 點護盾）',
     icon: '🛡️',
     desc: '「まだ終わっていない！」只要監考老師還沒喊停筆，就永遠還有逆轉的奇蹟！'
   },
@@ -235,7 +235,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 5.5,
     rarity: 'R',
     type: 'vfx',
-    buff: '攻擊視覺亮化＆爆擊率 +5%',
+    buff: '答對時 25% 機率觸發額外 +12 G 閃電紅包',
     vfxClass: 'bg-purple-400 drop-shadow-[0_0_20px_purple]',
     desc: '中規中矩但很帥氣的紫色電弧，至少讓鄰座的人以為你正在打什麼高深電競。'
   },
@@ -259,9 +259,9 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 5.5,
     rarity: 'R',
     type: 'chip',
-    buff: '答錯失誤時傷害固定減免 3 點',
+    buff: '答錯失誤時護盾損失減免 3 點',
     icon: '🙇',
-    desc: '「大変申し訳ございませんでした！」只要道歉姿勢夠誠懇，扣血都能少扣一點。'
+    desc: '「大変申し訳ございませんでした！」只要道歉姿勢夠誠懇，扣護盾都能少扣一點。'
   },
   {
     id: 'chip_r_anime',
@@ -270,7 +270,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 5.5,
     rarity: 'R',
     type: 'chip',
-    buff: '答題基礎傷害 +15%',
+    buff: '每場首次答錯保護 Combo 不歸零',
     icon: '🎧',
     desc: '號稱「看五百部動畫就能學會日文」，結果考試時腦袋只有「ばか」跟「お前」。'
   },
@@ -379,7 +379,7 @@ export const VIRTUAL_GACHA_POOL = [
     chance: 5.0,
     rarity: 'N',
     type: 'vfx',
-    buff: '答題傷害 +2（夜間手速）',
+    buff: '答對額外 +2 G（夜間手速）',
     vfxClass: 'bg-lime-400 drop-shadow-[0_0_15px_#a3e635]',
     extra: '🦟',
     desc: '半夜背動詞變化總有蚊子在耳邊「ぶーん」，揮手打蚊子的反射神經比選答案還快。'
@@ -415,27 +415,27 @@ export const VIRTUAL_GACHA_POOL = [
 export const SET_BONUSES = {
   sakura: {
     name: '🌸 櫻華神樂套裝 (3/3)',
-    desc: '完美通關金幣 +40%，且失誤時受到傷害降低 20%'
+    desc: '完美通關金幣 +40%，且失誤時護盾損失降低 20%'
   },
   cyber: {
     name: '⚡ 量子駭客套裝 (3/3)',
-    desc: '閱讀時間寬裕度 +2 秒，每進入下一波回復 10 點 HP'
+    desc: '閱讀時間寬裕度 +2 秒，每進入下一波回復 10 點護盾'
   },
   shachiku: {
     name: '🚃 終電社畜不屈套裝 (3/3)',
-    desc: '失誤傷害減少 25%，全通關額外領取「加班津貼 +120 G」'
+    desc: '失誤護盾損失減少 25%，全通關額外領取「加班津貼 +120 G」'
   },
   izakaya: {
     name: '🍻 居酒屋微醺流暢套裝 (3/3)',
-    desc: '每次答對連擊額外 +10 G，失誤時 25% 機率「醉拳閃避」免傷'
+    desc: '每次答對連擊額外 +10 G，失誤時 25% 機率「醉拳閃避」不扣護盾'
   },
   chuuni: {
     name: '🍜 深夜動畫狂熱套裝 (3/3)',
-    desc: '中二魂覺醒：爆擊率 +25%，全通關額外獎勵 +100 G'
+    desc: '中二魂覺醒：神速直覺判定放寬 +0.6 秒，全通關額外獎勵 +100 G'
   },
   mythic: {
     name: '🌌 虛數合格奇蹟套裝 (3/3)',
-    desc: '全通關金幣 +50%、單題答對回 3 HP、閱讀測驗時間 +10 秒'
+    desc: '全通關金幣 +50%、單題答對回 3 護盾、閱讀測驗時間 +10 秒'
   }
 };
 
