@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
 import { tts } from './utils/tts';
-import { toHiragana } from './utils/ruby';
+import { toHiragana, stripRuby } from './utils/ruby';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL, COLLECTION_MILESTONES } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
@@ -78,13 +78,36 @@ const createDefaultPlayerData = () => ({
   mistakeCounts: {}
 });
 
+const ACTIVE_ACCOUNT_STORAGE_KEY = 'neon_game_active_account';
+
+const loadSavedAccount = () => {
+  try {
+    const raw = localStorage.getItem(ACTIVE_ACCOUNT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      (parsed.mode === 'email' || parsed.mode === 'phone') &&
+      typeof parsed.value === 'string' &&
+      parsed.value.trim() &&
+      typeof parsed.key === 'string' &&
+      parsed.key.trim()
+    ) {
+      return parsed;
+    }
+  } catch (e) {
+    console.error('Failed to read saved account:', e);
+  }
+  return null;
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [isAuthResolved, setIsAuthResolved] = useState(false);
-  const [account, setAccount] = useState(null);
+  const [account, setAccount] = useState(loadSavedAccount);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
   const [showMissionConfig, setShowMissionConfig] = useState(false);
-  const [screen, setScreen] = useState('login');
+  const [screen, setScreen] = useState(() => (loadSavedAccount() ? 'menu' : 'login'));
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [practiceMode, setPracticeMode] = useState('mixed');
@@ -629,6 +652,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
   const handleLoginSuccess = (enteredAccount) => {
+    try {
+      localStorage.setItem(ACTIVE_ACCOUNT_STORAGE_KEY, JSON.stringify(enteredAccount));
+    } catch (e) {
+      console.error('Failed to persist active account:', e);
+    }
     const freshDefault = createDefaultPlayerData();
     playerDataRef.current = freshDefault;
     setPlayerData(freshDefault);
@@ -640,6 +668,11 @@ export default function App() {
     clearAnswerTimer();
     clearGachaTimers();
     tts.stop();
+    try {
+      localStorage.removeItem(ACTIVE_ACCOUNT_STORAGE_KEY);
+    } catch (e) {
+      console.error('Failed to remove active account:', e);
+    }
     const freshDefault = createDefaultPlayerData();
     playerDataRef.current = freshDefault;
     setPlayerData(freshDefault);
@@ -735,7 +768,7 @@ export default function App() {
     if (type === 'sort') return `${data.context} ${data.example || ''}`.trim();
     if (type === 'type') return `${data.base} → ${data.correct}`;
     if (type === 'mcq') return data.options?.[data.correct] || data.question;
-    if (type === 'reading') return `${(data.text || '').slice(0, 22)}…`;
+    if (type === 'reading') return `${stripRuby(data.text || '').slice(0, 22)}…`;
     return '';
   };
 
@@ -1057,7 +1090,10 @@ export default function App() {
     const accepted = combatUI.data.acceptedAnswers || [combatUI.data.correct];
     const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
     const userHira = toHiragana(userInput);
-    const isCorrect = accepted.includes(userInput) || accepted.some(a => toHiragana(a) === userHira);
+    const isCorrect = accepted.some((a) => {
+      const plain = stripRuby(a);
+      return plain === userInput || toHiragana(plain) === userHira;
+    });
     processAnswer(isCorrect, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
   const handlePotionClick = (idx) => {
@@ -2190,7 +2226,7 @@ export default function App() {
                      </div>
                      {combatUI.data.base && (
                        <div className="text-center text-xs text-cyan-400 font-bold">
-                         💡 支援漢字或平假名輸入（原形：{combatUI.data.base}）
+                         💡 支援漢字或平假名輸入（原形：<RubyText text={combatUI.data.base} showRuby={currentLv === 0} />）
                        </div>
                      )}
                      <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-4 sm:p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
