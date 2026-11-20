@@ -1,7 +1,9 @@
-import { Hexagon, Flame, Sparkles } from 'lucide-react';
+import { useState } from 'react';
+import { Hexagon, Flame, Sparkles, Zap } from 'lucide-react';
 import { SET_BONUSES } from '../data/gachaPool';
 
 export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, closeGacha }) => {
+  const [tapBoost, setTapBoost] = useState(0);
   if (gachaState.status === 'idle') return null;
 
   const isMulti = gachaState.results.length > 1;
@@ -11,16 +13,34 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
     return sum + (r.rarity === 'UR' ? 5 : (r.rarity === 'SSR' ? 3 : 1));
   }, 0);
 
+  const handleClose = () => {
+    setTapBoost(0);
+    closeGacha();
+  };
+
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden">
       <div className="absolute inset-0 bg-black/95 backdrop-blur-md transition-opacity duration-500" />
 
       {(gachaState.status === 'charging' || gachaState.status === 'upgrading') && (
-        <div className={`relative flex items-center justify-center w-full h-full ${gachaState.displayRarity === 'UR' || gachaState.displayRarity === 'SSR' ? 'animate-[camera-shake_0.3s_infinite]' : ''}`}>
-          <div className={`absolute w-80 h-80 rounded-full border-2 border-dashed ${currentRarityConfig.ring1}`} style={{ animation: `ring-spin-right 1.2s linear infinite` }} />
-          <div className={`absolute w-64 h-64 rounded-full border-[4px] border-dotted ${currentRarityConfig.ring2}`} style={{ animation: `ring-spin-left 0.8s linear infinite` }} />
+        <button
+          type="button"
+          onClick={() => setTapBoost((c) => c + 1)}
+          className={`relative flex items-center justify-center w-full h-full focus:outline-none ${gachaState.displayRarity === 'UR' || gachaState.displayRarity === 'SSR' ? 'animate-[camera-shake_0.3s_infinite]' : ''}`}
+        >
+          <div
+            className={`absolute w-80 h-80 rounded-full border-2 border-dashed transition-transform duration-150 ${currentRarityConfig.ring1}`}
+            style={{ animation: 'ring-spin-right 1.2s linear infinite', transform: `scale(${1 + Math.min(tapBoost * 0.03, 0.25)})` }}
+          />
+          <div
+            className={`absolute w-64 h-64 rounded-full border-[4px] border-dotted transition-transform duration-150 ${currentRarityConfig.ring2}`}
+            style={{ animation: 'ring-spin-left 0.8s linear infinite' }}
+          />
 
-          <div className={`relative flex flex-col items-center justify-center z-10 ${gachaState.status === 'upgrading' ? 'animate-[upgrade-burst_0.6s_ease-out]' : ''}`} style={{ animation: 'core-shake 0.1s infinite' }}>
+          <div
+            className={`relative flex flex-col items-center justify-center z-10 transition-transform duration-100 ${gachaState.status === 'upgrading' ? 'animate-[upgrade-burst_0.6s_ease-out]' : ''}`}
+            style={{ animation: 'core-shake 0.1s infinite', transform: `scale(${1 + Math.min(tapBoost * 0.04, 0.3)})` }}
+          >
             <Hexagon size={110} className={currentRarityConfig.color} fill="currentColor" />
             <div className="absolute font-black text-black text-xl">解析</div>
 
@@ -29,12 +49,18 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
                 <Flame /> ⚠️ 協議臨界！信號昇格！ <Flame />
               </div>
             ) : (
-              <div className={`${currentRarityConfig.color} font-bold tracking-[0.3em] mt-8`}>
-                正在解構資料包 ({gachaState.results.length} 連抽)...
+              <div className="flex flex-col items-center gap-2 mt-8">
+                <div className={`${currentRarityConfig.color} font-bold tracking-[0.3em]`}>
+                  正在解構資料包 ({gachaState.results.length} 連抽)...
+                </div>
+                <div className="text-[11px] font-black text-cyan-300 bg-cyan-950/70 border border-cyan-500/60 px-3 py-1 rounded-full flex items-center gap-1">
+                  <Zap size={12} className="text-amber-300" />
+                  {tapBoost > 0 ? `手動超頻充能 x${tapBoost}！` : '連點核心加速解析充能'}
+                </div>
               </div>
             )}
           </div>
-        </div>
+        </button>
       )}
 
       {gachaState.status === 'revealed' && (
@@ -127,7 +153,7 @@ export const GachaModal = ({ gachaState, currentRarityConfig, getRarityConfig, c
             })}
           </div>
 
-          <button onClick={closeGacha} className="bg-gray-800 border-2 border-cyan-500 hover:bg-gray-700 text-cyan-300 font-black text-lg py-3 px-8 rounded-full active:scale-95 transition-transform w-full max-w-sm mb-3 shrink-0">
+          <button onClick={handleClose} className="bg-gray-800 border-2 border-cyan-500 hover:bg-gray-700 text-cyan-300 font-black text-lg py-3 px-8 rounded-full active:scale-95 transition-transform w-full max-w-sm mb-3 shrink-0">
             確認入庫
           </button>
         </div>

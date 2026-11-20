@@ -1,5 +1,6 @@
 import { Brain, Zap, Trophy, Coins, CheckCircle2, Swords } from 'lucide-react';
 import { RubyText } from './RubyText';
+import { SkillRadarChart } from './SkillRadarChart';
 
 export const BattleReportModal = ({ report, onClose }) => {
   if (!report) return null;
@@ -15,6 +16,7 @@ export const BattleReportModal = ({ report, onClose }) => {
     nemesisSlain,
     earnedGold,
     bonusGold,
+    isOverload,
     rankInfo
   } = report;
 
@@ -71,7 +73,7 @@ export const BattleReportModal = ({ report, onClose }) => {
               </span>
               <div className="text-xl font-black text-yellow-400">+{earnedGold} G</div>
               <span className="text-[10px] text-gray-400">
-                準確率 {accuracy}% {bonusGold > 0 ? `(含速度/宿敵 +${bonusGold}G)` : ''}
+                準確率 {accuracy}% {isOverload ? '(過載通關減半)' : (bonusGold > 0 ? `(含賞金 +${bonusGold}G)` : '')}
               </span>
             </div>
           </div>
@@ -89,6 +91,11 @@ export const BattleReportModal = ({ report, onClose }) => {
               {rankInfo.nextRank && (
                 <div className="text-[10px] text-gray-400 text-right">
                   距離「{rankInfo.nextRank.title}」還差 {Math.max(0, rankInfo.nextRank.minXp - rankInfo.xp)} XP
+                </div>
+              )}
+              {rankInfo.coreSkills && (
+                <div className="pt-2 mt-1 border-t border-cyan-900/40">
+                  <SkillRadarChart coreSkills={rankInfo.coreSkills} size={185} />
                 </div>
               )}
             </div>

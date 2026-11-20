@@ -9,6 +9,8 @@ import { GachaModal } from './components/GachaModal';
 import { LoginScreen } from './components/LoginScreen';
 import { BattleReportModal } from './components/BattleReportModal';
 import { CodexScreen } from './components/CodexScreen';
+import { CyberMonster } from './components/CyberMonster';
+import { BottomNav } from './components/BottomNav';
 import {
   DIFFICULTY_TIERS,
   getQuestionTier,
@@ -18,7 +20,7 @@ import {
   analyzeReadingPassage,
   computeSkillProfile
 } from './utils/learningProgress';
-import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut } from 'lucide-react';
+import { Terminal, Shield, Zap, BookOpen, AlertTriangle, Play, ShoppingCart, Trophy, Coins, Gift, Clock, Heart, FastForward, Pause, RotateCcw, XOctagon, PlayCircle, FileText, Database, CalendarCheck, Settings, History, Plus, Trash2, Hexagon, Sparkles, Star, Info, Backpack, CheckCircle2, Lock, Search, Target, X, Flame, Award, Volume2, VolumeX, Layers, Brain, Eye, Swords, Mail, Smartphone, LogOut, SlidersHorizontal } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -63,8 +65,8 @@ const PRACTICE_MODES = [
 ];
 
 const createDefaultPlayerData = () => ({
-  hp: 100, maxHp: 100, atk: 10, def: 5, ult: 0, maxUlt: 100, mistakes: [],
-  critRate: 0.1, lastLoginDate: '', gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
+  hp: 100, maxHp: 100, mistakes: [],
+  lastLoginDate: '', loginStreak: 0, gold: 1500, vocabKills: 0, bossKills: 0, achievements: [], mastery: {},
   gachaPool: DEFAULT_GACHA_POOL.map(item => ({ ...item })), isGachaLocked: false, gachaHistory: [],
   inventory: [], equipped: { vfx: 'default', skin: 'default', chip: null },
   pityCount: 0,
@@ -81,6 +83,7 @@ export default function App() {
   const [isAuthResolved, setIsAuthResolved] = useState(false);
   const [account, setAccount] = useState(null);
   const [showDetailedProgress, setShowDetailedProgress] = useState(false);
+  const [showMissionConfig, setShowMissionConfig] = useState(false);
   const [screen, setScreen] = useState('login');
   const [isLoading, setIsLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -119,16 +122,29 @@ export default function App() {
     totalAnswered: 0,
     levelUps: [],
     nemesisSlain: [],
+    battleGold: 0,
     bonusGold: 0
   });
 
-  const [waveState, setWaveState] = useState({ isActive: false, currentWave: 1, queue: [], currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: 'mixed' });
-  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
+  const [waveState, setWaveState] = useState({
+    isActive: false,
+    currentWave: 1,
+    queue: [],
+    currentIndex: 0,
+    shieldUsed: false,
+    comboShieldUsed: false,
+    overloadMode: false,
+    firstBonusUsed: false,
+    mode: 'mixed'
+  });
+  const [combatUI, setCombatUI] = useState({ type: null, data: null, startTime: 0, elapsedMs: 0, comboText: '', slots: [], inputValue: '', readingStep: 0, timeLeft: 120 });
   const [feedback, setFeedback] = useState({ show: false, damageTaken: 0, text: '', correct: '', example: '', exampleZh: '', isWrong: false });
   const [isPaused, setIsPaused] = useState(false);
   const [isAnswering, setIsAnswering] = useState(false);
   const isAnsweringRef = useRef(false);
   const answerTimerRef = useRef(null);
+  const toastTimerRef = useRef(null);
+  const gachaTimersRef = useRef([]);
 
   const clearAnswerTimer = () => {
     if (answerTimerRef.current) {
@@ -138,7 +154,15 @@ export default function App() {
     isAnsweringRef.current = false;
     setIsAnswering(false);
   };
-  useEffect(() => () => clearAnswerTimer(), []);
+  const clearGachaTimers = () => {
+    gachaTimersRef.current.forEach((t) => clearTimeout(t));
+    gachaTimersRef.current = [];
+  };
+  useEffect(() => () => {
+    clearAnswerTimer();
+    clearGachaTimers();
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
 
   const [shopTab, setShopTab] = useState('gacha');
   const [activeBannerIdx, setActiveBannerIdx] = useState(0);
@@ -163,15 +187,29 @@ export default function App() {
   const [damageNumbers, setDamageNumbers] = useState([]);
   const [combatFx, setCombatFx] = useState(null);
   const [screenShake, setScreenShake] = useState(false);
+  const [flashCutIn, setFlashCutIn] = useState(null);
 
-  const showToast = (message, type = 'info') => { setToast({ visible: true, message, type }); setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000); };
-  const triggerDamageNumber = (amount, isCrit, isHeal = false) => {
-    const id = Date.now() + Math.random(); const offsetX = (Math.random() - 0.5) * 40;
-    setDamageNumbers(prev => [...prev, { id, amount, isCrit, isHeal, offsetX }]);
+  const showToast = (message, type = 'info') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ visible: true, message, type });
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(prev => ({ ...prev, visible: false }));
+    }, 3000);
+  };
+  const triggerDamageNumber = (label, isCrit, isHeal = false) => {
+    const id = Date.now() + Math.random();
+    const offsetX = (Math.random() - 0.5) * 40;
+    setDamageNumbers(prev => [...prev, { id, label: String(label), amount: label, isCrit, isHeal, offsetX }]);
     setTimeout(() => setDamageNumbers(prev => prev.filter(d => d.id !== id)), 1000);
   };
   const triggerFx = (type) => { setCombatFx(type); setTimeout(() => setCombatFx(null), 500); };
   const triggerScreenShake = () => { setScreenShake(true); setTimeout(() => setScreenShake(false), 300); };
+  const triggerFlashCutIn = (sec) => {
+    const id = Date.now();
+    setFlashCutIn({ id, sec });
+    setTimeout(() => setFlashCutIn(prev => (prev?.id === id ? null : prev)), 900);
+  };
 
   const TOTAL_ENEMIES = VALID_ENEMY_IDS.size;
   const masteryObj = playerData.mastery || {};
@@ -224,10 +262,12 @@ export default function App() {
   const loadEncounter = (encounter) => {
     if (!encounter) return;
     clearAnswerTimer();
+    setDamageNumbers([]);
+    setCombatFx(null);
     setShowTranslationHint(false);
     setPeekVocabWord(null);
     const baseTime = getReadingTimeLimit();
-    let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
+    let uiState = { type: encounter.type, data: encounter.data, startTime: Date.now(), elapsedMs: 0, comboText: '', timeLeft: baseTime, readingStep: 0, inputValue: '' };
     if (encounter.type === 'mcq') {
       uiState.data = encounter.data;
     }
@@ -370,12 +410,26 @@ export default function App() {
       totalAnswered: 0,
       levelUps: [],
       nemesisSlain: [],
+      battleGold: 0,
       bonusGold: 0
     };
     setBattleReport(null);
-    setPlayerData(prev => ({ ...prev, hp: prev.maxHp || 100 }));
+    const resetHp = playerDataRef.current.maxHp || 100;
+    const resetPlayerData = { ...playerDataRef.current, hp: resetHp };
+    playerDataRef.current = resetPlayerData;
+    setPlayerData(resetPlayerData);
     setCombo(0);
-    setWaveState({ isActive: true, currentWave: fullQueue[0].wave, queue: fullQueue, currentIndex: 0, shieldUsed: false, firstBonusUsed: false, mode: targetMode });
+    setWaveState({
+      isActive: true,
+      currentWave: fullQueue[0].wave,
+      queue: fullQueue,
+      currentIndex: 0,
+      shieldUsed: false,
+      comboShieldUsed: false,
+      overloadMode: false,
+      firstBonusUsed: false,
+      mode: targetMode
+    });
     setIsPaused(false);
     loadEncounter(fullQueue[0]);
     setScreen('battle');
@@ -392,7 +446,7 @@ export default function App() {
         const mergedLocal = {
           ...playerDataRef.current,
           ...localData,
-          critRate: localData.critRate || 0.1,
+          loginStreak: localData.loginStreak || 0,
           lastLoginDate: localData.lastLoginDate || '',
           mastery: localData.mastery || {},
           claimedMilestones: localData.claimedMilestones || [],
@@ -437,7 +491,7 @@ export default function App() {
           const base = isLocalNewer ? { ...data, ...currentLocal } : { ...currentLocal, ...data };
           const merged = {
             ...base,
-            critRate: base.critRate || 0.1,
+            loginStreak: base.loginStreak || 0,
             lastLoginDate: base.lastLoginDate || '',
             mastery: mergedMastery,
             claimedMilestones: mergedClaimed,
@@ -494,26 +548,34 @@ export default function App() {
       const timer = setTimeout(() => setCombatUI(prev => ({ ...prev, timeLeft: prev.timeLeft - 1 })), 1000);
       return () => clearTimeout(timer);
     } else if (screen === 'battle' && combatUI.type === 'reading' && combatUI.timeLeft === 0 && !feedback.show && !isPaused && !isAnswering) {
-      let dmg = Math.floor((playerData.maxHp || 100) * 0.3);
+      const latestPData = playerDataRef.current;
+      const curHp = latestPData.hp ?? 100;
+      let dmg = Math.floor((latestPData.maxHp || 100) * 0.3);
 
-      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((playerData.hp || 100) - dmg <= 0)) {
+      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && (curHp - dmg <= 0)) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
-        dmg = Math.max(0, (playerData.hp || 100) - 1);
-        showToast("🛡️ 量子鎖血晶片生效！強制保留 1 HP！", "success");
+        dmg = Math.max(0, curHp - 1);
+        showToast("🛡️ 量子死線防禦生效！強制保留 1 點護盾！", "success");
       }
 
       sfx.playError();
       triggerScreenShake();
       setCombo(0);
 
-      const pData = { ...playerDataRef.current };
-      pData.hp = Math.max(0, (pData.hp || 100) - dmg);
+      const pData = {
+        ...latestPData,
+        mastery: { ...(latestPData.mastery || {}) },
+        mistakeCounts: { ...(latestPData.mistakeCounts || {}) }
+      };
+      pData.hp = Math.max(0, curHp - dmg);
       if (combatUI.data) {
-        pData.mastery = { ...(pData.mastery || {}), [combatUI.data.id]: 0 };
+        const qId = combatUI.data.id;
+        pData.mastery[qId] = 0;
+        pData.mistakeCounts[qId] = (pData.mistakeCounts[qId] || 0) + 1;
         const qData = combatUI.data.questions?.[combatUI.readingStep];
         if (qData) {
           const mistakeEntry = {
-            id: combatUI.data.id,
+            id: qId,
             type: 'reading',
             q: qData.q,
             a: qData.options[qData.correct],
@@ -530,7 +592,7 @@ export default function App() {
       saveGame(pData);
 
       const resetTime = getReadingTimeLimit();
-      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: 'Boss 發動了超光速直擊！可切換「休閒學習模式」關閉時間限制。', correct: '時間耗盡', example: '請加快閱讀理解或利用暫停鍵思考文章內容。', exampleZh: '' });
+      setFeedback({ show: true, isWrong: true, damageTaken: dmg, text: '閱讀倒數歸零！可切換「休閒學習模式」關閉時間限制。', correct: '時間耗盡', example: '請加快閱讀理解或利用暫停鍵思考文章內容。', exampleZh: '' });
       setCombatUI(prev => ({ ...prev, timeLeft: resetTime }));
     }
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, isAnswering, relaxedMode]);
@@ -576,21 +638,23 @@ export default function App() {
 
   const handleLogout = () => {
     clearAnswerTimer();
+    clearGachaTimers();
     tts.stop();
     const freshDefault = createDefaultPlayerData();
     playerDataRef.current = freshDefault;
     setPlayerData(freshDefault);
+    setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
+    setFlashCutIn(null);
     setBattleReport(null);
     setAccount(null);
     setScreen('login');
   };
 
   const handleNext = (newHp, requeuedCurrent = false) => {
-    if (newHp <= 0) {
-      showToast("系統崩潰... 返回主終端機。", "error");
-      saveGame({ ...playerDataRef.current, hp: playerDataRef.current.maxHp || 100 });
-      tts.stop();
-      setScreen('menu'); return;
+    let enteredOverload = waveState.overloadMode;
+    if (newHp <= 0 && !enteredOverload) {
+      enteredOverload = true;
+      showToast("⚠️ 護盾歸零！進入「過載續戰」：仍可完成本場學習與戰報，通關津貼減半", "error");
     }
     const effectiveQueue = requeuedCurrent && waveState.queue[waveState.currentIndex]
       ? [...waveState.queue, waveState.queue[waveState.currentIndex]]
@@ -609,6 +673,7 @@ export default function App() {
       if (activeSetBonus?.key === 'shachiku') earnedGold += 120;
       if (activeSetBonus?.key === 'chuuni') earnedGold += 100;
       if (equippedVFX?.id === 'vfx_ur1') earnedGold += 150;
+      if (enteredOverload) earnedGold = Math.floor(earnedGold * 0.5);
 
       const latest = playerDataRef.current;
       const stats = runStatsRef.current;
@@ -638,8 +703,9 @@ export default function App() {
         totalAnswered: stats.totalAnswered,
         levelUps: stats.levelUps,
         nemesisSlain: stats.nemesisSlain,
-        earnedGold: earnedGold + stats.bonusGold,
-        bonusGold: stats.bonusGold,
+        earnedGold: earnedGold + stats.battleGold,
+        bonusGold: stats.battleGold,
+        isOverload: enteredOverload,
         rankInfo: computeSkillProfile(updatedData)
       });
 
@@ -652,13 +718,13 @@ export default function App() {
         if (activeSetBonus?.key === 'cyber') waveHeal += 10;
         if (equippedChip?.id === 'chip_nomihodai') waveHeal += 8;
         if (waveHeal > 0) {
-          const healedHp = Math.min(playerDataRef.current.maxHp || 100, newHp + waveHeal);
+          const healedHp = Math.min(playerDataRef.current.maxHp || 100, Math.max(0, newHp) + waveHeal);
           if (healedHp !== newHp) {
             saveGame({ ...playerDataRef.current, hp: healedHp });
           }
         }
       }
-      setWaveState(prev => ({ ...prev, queue: effectiveQueue, currentWave: nextEncounter.wave, currentIndex: nextIndex }));
+      setWaveState(prev => ({ ...prev, queue: effectiveQueue, currentWave: nextEncounter.wave, currentIndex: nextIndex, overloadMode: enteredOverload }));
       loadEncounter(nextEncounter);
     }
   };
@@ -673,7 +739,7 @@ export default function App() {
     return '';
   };
 
-  const processAnswer = (isCorrect, damageMod = 1, heal = 0, mistakeInfo = null) => {
+  const processAnswer = (isCorrect, heal = 0, mistakeInfo = null) => {
     if (isPaused || isAnsweringRef.current) return;
     isAnsweringRef.current = true;
     setIsAnswering(true);
@@ -683,7 +749,8 @@ export default function App() {
       mistakeCounts: { ...(playerDataRef.current.mistakeCounts || {}) }
     };
 
-    const responseSec = combatUI.startTime ? Math.max(0.2, (Date.now() - combatUI.startTime) / 1000) : 5.0;
+    const activeMs = (combatUI.elapsedMs || 0) + (combatUI.startTime ? Math.max(0, Date.now() - combatUI.startTime) : 0);
+    const responseSec = Math.max(0.2, activeMs / 1000);
     if (combatUI.type !== 'potion') {
       runStatsRef.current.totalAnswered += 1;
       runStatsRef.current.responseTimes.push(Math.min(60, responseSec));
@@ -694,22 +761,8 @@ export default function App() {
       const newCombo = combatUI.type === 'potion' ? combo : combo + 1;
       if (combatUI.type !== 'potion') setCombo(newCombo);
 
-      const isFlashRead = combatUI.type !== 'potion' && responseSec <= getFlashThreshold(combatUI.type);
-      const comboBonus = 1 + Math.min(newCombo * 0.05, 0.4);
-      let effectiveCrit = pData.critRate || 0.1;
-      if (equippedVFX?.id === 'vfx_r1') effectiveCrit += 5;
-      if (equippedChip?.id === 'chip_deadline' && (pData.hp || 100) < (pData.maxHp || 100) * 0.5) effectiveCrit += 35;
-      if (activeSetBonus?.key === 'chuuni') effectiveCrit += 25;
-      let isCrit = isFlashRead || Math.random() * 100 < effectiveCrit;
-
-      let dmg = Math.floor(((pData.atk || 10) + Math.floor(Math.random() * 5)) * damageMod * comboBonus);
-      if (isFlashRead) dmg = Math.floor(dmg * 1.2);
-      if (equippedChip?.id === 'chip_ramen') dmg = Math.floor(dmg * 1.4);
-      else if (equippedChip?.id === 'chip_r_anime') dmg = Math.floor(dmg * 1.15);
-      if (equippedVFX?.id === 'vfx_coffee' && newCombo >= 2) dmg = Math.floor(dmg * 1.25);
-      if (equippedVFX?.id === 'vfx_chuuni' && (combatUI.type === 'type' || combatUI.type === 'sort')) dmg = Math.floor(dmg * 1.3);
-      if (equippedVFX?.id === 'vfx_n_mos') dmg += 2;
-      if (isCrit) dmg = Math.floor(dmg * (equippedSkin?.id === 'skin_neko' ? 2.6 : 2.0));
+      const flashThreshold = getFlashThreshold(combatUI.type) + (activeSetBonus?.key === 'chuuni' ? 0.6 : 0);
+      const isFlashRead = combatUI.type !== 'potion' && responseSec <= flashThreshold;
 
       if (combatUI.type === 'potion' && equippedVFX?.id === 'vfx_highball') {
         heal = Math.floor(heal * 1.5);
@@ -723,41 +776,70 @@ export default function App() {
       if (combatUI.type !== 'potion' && activeSetBonus?.key === 'mythic') {
         heal += 3;
       }
-      pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 100) + heal);
+      pData.hp = Math.min(pData.maxHp || 100, (pData.hp || 0) + heal);
 
-      // Apply equipment combat gold buffs & flash/nemesis tracking
+      let questionGold = 0;
+      let luckyBonus = false;
+      let defeatedNemesis = false;
+      let reachedLv3 = false;
+      let clearedMistake = false;
+
       if (combatUI.type !== 'potion') {
         runStatsRef.current.correctCount += 1;
+        questionGold += newCombo >= 3 ? 3 : 2;
+
         if (isFlashRead) {
           runStatsRef.current.flashCount += 1;
           runStatsRef.current.bonusGold += 5;
-          pData.gold = (pData.gold || 0) + 5;
-          showToast(`⚡ 神速直覺 (${responseSec.toFixed(1)}s)！+5 G`, "success");
+          questionGold += 5;
+          triggerFlashCutIn(responseSec.toFixed(1));
         }
         if (waveState.currentIndex === 0 && !waveState.firstBonusUsed && equippedSkin?.id === 'skin_cyber') {
-          pData.gold = (pData.gold || 0) + 50;
+          questionGold += 50;
           setWaveState(prev => ({ ...prev, firstBonusUsed: true }));
         }
         if (newCombo >= 3 && equippedVFX?.id === 'vfx_cyber') {
-          pData.gold = (pData.gold || 0) + 15;
+          questionGold += 15;
         }
         if (equippedSkin?.id === 'skin_train') {
-          pData.gold = (pData.gold || 0) + 12;
+          questionGold += 12;
         }
         if (equippedSkin?.id === 'skin_takoyaki' && combatUI.type === 'reading') {
-          pData.gold = (pData.gold || 0) + 20;
+          questionGold += 20;
         }
         if (equippedVFX?.id === 'vfx_r_pencil' && combatUI.type === 'mcq') {
-          pData.gold = (pData.gold || 0) + 8;
+          questionGold += 8;
         }
         if (equippedSkin?.id === 'skin_r_shiba' && combatUI.type === 'vocab') {
-          pData.gold = (pData.gold || 0) + 6;
+          questionGold += 6;
         }
         if (equippedChip?.id === 'chip_n_wa_ga') {
-          pData.gold = (pData.gold || 0) + 2;
+          questionGold += 2;
         }
         if (activeSetBonus?.key === 'izakaya') {
-          pData.gold = (pData.gold || 0) + 10;
+          questionGold += 10;
+        }
+        if (equippedVFX?.id === 'vfx_coffee' && newCombo >= 2) {
+          questionGold += 6;
+        }
+        if (equippedChip?.id === 'chip_deadline' && (pData.hp || 0) < (pData.maxHp || 100) * 0.5) {
+          questionGold += 12;
+        }
+        if (equippedChip?.id === 'chip_ramen') {
+          questionGold += 10;
+        }
+        if (equippedSkin?.id === 'skin_neko' && (isFlashRead || newCombo >= 3)) {
+          questionGold += 8;
+        }
+        if (equippedVFX?.id === 'vfx_chuuni' && (combatUI.type === 'type' || combatUI.type === 'sort')) {
+          questionGold += 10;
+        }
+        if (equippedVFX?.id === 'vfx_r1' && Math.random() < 0.25) {
+          questionGold += 12;
+          luckyBonus = true;
+        }
+        if (equippedVFX?.id === 'vfx_n_mos') {
+          questionGold += 2;
         }
       }
 
@@ -770,10 +852,14 @@ export default function App() {
 
         const qLabel = getEncounterLabel(combatUI.type, combatUI.data);
         if (prevLv < 3) {
-          runStatsRef.current.levelUps.push({ id: qId, label: qLabel, fromLv: prevLv, toLv: Math.min(3, nextLv) });
-          if (nextLv === 3) {
-            showToast(`👑 完全掌握解鎖！此題已達 Lv.3 直覺反射`, "success");
+          const cappedTo = Math.min(3, nextLv);
+          const existingIdx = runStatsRef.current.levelUps.findIndex((u) => u.id === qId);
+          if (existingIdx >= 0) {
+            runStatsRef.current.levelUps[existingIdx].toLv = cappedTo;
+          } else {
+            runStatsRef.current.levelUps.push({ id: qId, label: qLabel, fromLv: prevLv, toLv: cappedTo });
           }
+          if (nextLv === 3) reachedLv3 = true;
         }
 
         // Nemesis check & defeat
@@ -781,10 +867,10 @@ export default function App() {
         if (prevFails >= 2) {
           pData.mistakeCounts[qId] = 0;
           pData.nemesisSlainCount = (pData.nemesisSlainCount || 0) + 1;
-          pData.gold = (pData.gold || 0) + 30;
+          questionGold += 30;
           runStatsRef.current.bonusGold += 30;
           runStatsRef.current.nemesisSlain.push({ id: qId, label: qLabel });
-          showToast("⚔️ 宿敵討伐成功！獲得雙倍突破獎金 +30 G！", "success");
+          defeatedNemesis = true;
         } else if (prevFails > 0) {
           pData.mistakeCounts[qId] = 0;
         }
@@ -792,18 +878,35 @@ export default function App() {
         if (waveState.mode === 'mistakes') {
           const prevLen = (pData.mistakes || []).length;
           pData.mistakes = (pData.mistakes || []).filter(m => m.id !== qId && m.q !== mistakeInfo?.q);
-          if (pData.mistakes.length < prevLen && prevFails < 2) {
-            showToast("✅ 已攻克錯題！自動移出錯誤日誌", "success");
+          if (pData.mistakes.length < prevLen && !defeatedNemesis) {
+            clearedMistake = true;
           }
         }
       }
 
+      if (questionGold > 0) {
+        pData.gold = (pData.gold || 0) + questionGold;
+        runStatsRef.current.battleGold += questionGold;
+      }
+
+      // Prioritized, non-colliding toast notifications
+      if (defeatedNemesis) {
+        showToast(`⚔️ 宿敵討伐成功！獲得雙倍突破賞金 +30 G！`, "success");
+      } else if (reachedLv3) {
+        showToast(`👑 完全掌握解鎖！此題已達 Lv.3 直覺反射`, "success");
+      } else if (clearedMistake) {
+        showToast("✅ 已攻克錯題！自動移出錯誤日誌", "success");
+      } else if (luckyBonus) {
+        showToast("⚡ 紫電一閃觸發！額外 +12 G 閃電紅包", "success");
+      }
+
       if (combatUI.type === 'potion') {
-        triggerDamageNumber(heal, false, true);
+        triggerDamageNumber(`🛡️ +${heal}`, false, true);
         triggerFx('heal');
       } else {
-        triggerDamageNumber(dmg, isCrit);
-        if (isCrit || waveState.currentWave === 3) triggerScreenShake();
+        const prefix = isFlashRead || luckyBonus ? '⚡ ' : '';
+        triggerDamageNumber(`${prefix}+${questionGold} G`, isFlashRead || luckyBonus || questionGold >= 20);
+        if (isFlashRead || luckyBonus || waveState.currentWave === 3) triggerScreenShake();
         if (combatUI.type === 'vocab') triggerFx('slash');
         else if (combatUI.type === 'sort') triggerFx('shield');
         else if (combatUI.type === 'type') triggerFx('magic');
@@ -825,12 +928,19 @@ export default function App() {
       }
     } else {
       sfx.playError();
-      setCombo(0);
       triggerScreenShake();
+
+      let protectedCombo = false;
+      if (equippedChip?.id === 'chip_r_anime' && !waveState.comboShieldUsed && combo > 0) {
+        setWaveState(prev => ({ ...prev, comboShieldUsed: true }));
+        protectedCombo = true;
+      } else {
+        setCombo(0);
+      }
 
       let dmgTaken = relaxedMode
         ? 5
-        : (combatUI.type === 'potion' ? 10 : Math.max(1, (waveState.currentWave === 3 ? 30 : 15) - Math.floor((pData.def || 5) / 2)));
+        : (combatUI.type === 'potion' ? 10 : (waveState.currentWave === 3 ? 25 : 15));
 
       if (activeSetBonus?.key === 'sakura') {
         dmgTaken = Math.max(1, Math.floor(dmgTaken * 0.8));
@@ -843,25 +953,30 @@ export default function App() {
       }
       if (activeSetBonus?.key === 'izakaya' && Math.random() < 0.25) {
         dmgTaken = 0;
-        showToast("🍻 醉拳閃避發動！完美躲過扣血！", "success");
+        showToast("🍻 醉拳閃避發動！完美躲過護盾損失！", "success");
       }
 
-      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((pData.hp || 100) - dmgTaken <= 0)) {
+      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && ((pData.hp || 0) - dmgTaken <= 0) && (pData.hp || 0) > 0) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
-        dmgTaken = Math.max(0, (pData.hp || 100) - 1);
-        showToast("🛡️ 量子鎖血晶片發動！保全最後生命！", "success");
+        dmgTaken = Math.max(0, (pData.hp || 0) - 1);
+        showToast("🛡️ 量子死線防禦發動！強制保留 1 點護盾！", "success");
       }
 
-      pData.hp = Math.max(0, (pData.hp || 100) - dmgTaken);
+      pData.hp = Math.max(0, (pData.hp || 0) - dmgTaken);
+      let becameNemesis = false;
       if (combatUI.type !== 'potion' && combatUI.data) {
         const qId = combatUI.data.id;
         pData.mastery[qId] = 0;
         const nextFails = (pData.mistakeCounts[qId] || 0) + 1;
         pData.mistakeCounts[qId] = nextFails;
-        if (nextFails === 2) {
-          showToast("🔴 此題已列為「宿敵弱點」！擊破後可獲雙倍獎勵", "info");
-        }
+        if (nextFails === 2) becameNemesis = true;
       }
+      if (becameNemesis) {
+        showToast("🔴 此題已列為「宿敵弱點」！擊破後可獲雙倍賞金", "info");
+      } else if (protectedCombo) {
+        showToast("🎧 動漫雙倍速護盾：保留連擊不歸零！", "info");
+      }
+
       if (mistakeInfo && combatUI.type !== 'potion') {
         const entry = { id: combatUI.data?.id, type: combatUI.type, ...mistakeInfo };
         const filteredMistakes = (pData.mistakes || []).filter(
@@ -889,7 +1004,7 @@ export default function App() {
     const isMeaningMode = combatUI.data.vocabMode === 'meaning';
     const expected = isMeaningMode ? combatUI.data.usage : combatUI.data.answers[0];
     const correctDisplay = isMeaningMode ? `${combatUI.data.answers[0]}（${combatUI.data.usage}）` : combatUI.data.answers[0];
-    processAnswer(opt === expected, 1, 0, {
+    processAnswer(opt === expected, 0, {
       q: combatUI.data.ch,
       a: correctDisplay,
       exp: combatUI.data.usage,
@@ -922,7 +1037,7 @@ export default function App() {
       const fullExp = grammarNote
         ? `${grammarNote}\n\n【中譯】${combatUI.data.translation}`
         : combatUI.data.translation;
-      processAnswer(Boolean(matchedOrder), 2, 0, {
+      processAnswer(Boolean(matchedOrder), 0, {
         q: combatUI.data.context,
         a: correctSentenceDisplay,
         exp: fullExp,
@@ -943,7 +1058,7 @@ export default function App() {
     const correctLabel = accepted.length > 1 ? accepted.join(' / ') : combatUI.data.correct;
     const userHira = toHiragana(userInput);
     const isCorrect = accepted.includes(userInput) || accepted.some(a => toHiragana(a) === userHira);
-    processAnswer(isCorrect, 2, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+    processAnswer(isCorrect, 0, { q: combatUI.data.prompt, a: correctLabel, exp: combatUI.data.translation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
   const handlePotionClick = (idx) => {
     if (!combatUI.data) return;
@@ -951,7 +1066,7 @@ export default function App() {
     const fullSentence = combatUI.data.context.includes('___')
       ? combatUI.data.context.replace('___', correctOpt)
       : combatUI.data.context;
-    processAnswer(idx === combatUI.data.correct, 0, 20, {
+    processAnswer(idx === combatUI.data.correct, 20, {
       q: combatUI.data.context,
       a: correctOpt,
       exp: combatUI.data.example || combatUI.data.translation,
@@ -961,21 +1076,19 @@ export default function App() {
   };
   const handleMcqClick = (idx) => {
     if (!combatUI.data) return;
-    processAnswer(idx === combatUI.data.correct, idx === combatUI.data.correct ? 1.5 : 1, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
+    processAnswer(idx === combatUI.data.correct, 0, { q: combatUI.data.question, a: combatUI.data.options[combatUI.data.correct], exp: combatUI.data.explanation, example: combatUI.data.example, exampleZh: combatUI.data.exampleZh });
   };
 
   const handleReadingClick = (idx) => {
     if(!combatUI.data || !combatUI.data.questions || isAnsweringRef.current) return;
     const qData = combatUI.data.questions[combatUI.readingStep];
 
-    // Format option translations to prepend to the explanation
     const optionsText = qData.optionTranslations && qData.optionTranslations.length > 0
       ? qData.options.map((opt, i) => `${i + 1}. ${opt} (${qData.optionTranslations[i]})`).join('\n')
       : '';
 
     const fullExplanation = optionsText ? `【選項翻譯】\n${optionsText}\n\n【解析】\n${qData.explanation}` : qData.explanation;
 
-    // Pass the translation in the exampleZh field, and a label in the example field
     const feedbackInfo = {
       q: qData.q,
       a: qData.options[qData.correct],
@@ -990,13 +1103,21 @@ export default function App() {
         setCombatUI(prev => ({ ...prev, readingStep: prev.readingStep + 1 }));
         triggerFx('slash');
       } else {
-        processAnswer(true, 3, 0, feedbackInfo);
+        processAnswer(true, 0, feedbackInfo);
       }
     } else {
-      processAnswer(false, 1, 0, feedbackInfo);
+      processAnswer(false, 0, feedbackInfo);
     }
   };
 
+  const handlePause = () => {
+    setCombatUI(prev => ({
+      ...prev,
+      elapsedMs: (prev.elapsedMs || 0) + (prev.startTime ? Math.max(0, Date.now() - prev.startTime) : 0),
+      startTime: 0
+    }));
+    setIsPaused(true);
+  };
   const handleResume = () => { setIsPaused(false); setCombatUI(prev => ({ ...prev, startTime: Date.now() })); };
   const handleRestartBattle = () => {
     clearAnswerTimer();
@@ -1016,19 +1137,32 @@ export default function App() {
     sfx.init();
     const today = getLocalDateString();
     if (playerData.lastLoginDate === today) return;
-    let newCritRate = playerData.critRate || 0.1, message = "";
-    if (!playerData.lastLoginDate) { newCritRate = 0.2; message = "系統首次連線！爆擊率 +0.1%"; }
-    else {
+    let nextStreak = 1;
+    let message = "系統首次連線！";
+    if (playerData.lastLoginDate) {
       const [tY, tM, tD] = today.split('-').map(Number);
       const [lY, lM, lD] = playerData.lastLoginDate.split('-').map(Number);
       const diffDays = Math.round((new Date(tY, tM - 1, tD) - new Date(lY, lM - 1, lD)) / (1000 * 60 * 60 * 24));
-      if (diffDays === 1) { newCritRate += 0.1; message = "連續連線成功！爆擊率 +0.1%"; }
-      else if (diffDays >= 2) { newCritRate = 0.1; message = `中斷連線！爆擊重置`; }
-      else return;
+      if (diffDays === 1) {
+        nextStreak = (playerData.loginStreak || 0) + 1;
+        message = `連續簽到第 ${nextStreak} 天！`;
+      } else if (diffDays >= 2) {
+        nextStreak = 1;
+        message = "歡迎回歸連線！連勝重新起算";
+      } else return;
     }
-    sfx.playRareChime(false);
-    saveGame({ ...playerData, lastLoginDate: today, critRate: parseFloat(newCritRate.toFixed(1)), gold: (playerData.gold || 0) + 200 });
-    showToast(`${message} 💰獲得 200 G！`, "success");
+    const streakGold = 200 + Math.min(nextStreak - 1, 5) * 20;
+    const bonusCore = nextStreak > 0 && nextStreak % 3 === 0 ? 1 : 0;
+    sfx.playRareChime(bonusCore > 0);
+    saveGame({
+      ...playerData,
+      lastLoginDate: today,
+      loginStreak: nextStreak,
+      gold: (playerData.gold || 0) + streakGold,
+      dataCores: (playerData.dataCores || 0) + bonusCore
+    });
+    const coreText = bonusCore > 0 ? ` + ${bonusCore} 資料核心` : '';
+    showToast(`${message} 💰獲得 ${streakGold} G${coreText}！`, "success");
   };
 
   // ==========================================
@@ -1085,7 +1219,8 @@ export default function App() {
     const singleCost = poolType === 'virtual' ? 300 : 500;
     const cost = count === 10 ? (singleCost * 9) : singleCost;
 
-    if ((playerData.gold || 0) < cost) {
+    const latestPlayer = playerDataRef.current;
+    if ((latestPlayer.gold || 0) < cost) {
       setBtnShake(true);
       sfx.playError();
       setTimeout(() => setBtnShake(false), 500);
@@ -1093,7 +1228,6 @@ export default function App() {
     }
 
     const currentBanner = BANNER_THEMES[activeBannerIdx];
-    const latestPlayer = playerDataRef.current;
     let tempPity = latestPlayer.pityCount || 0;
     const ownedOrPulledIds = new Set((latestPlayer.inventory || []).map(inv => inv?.id).filter(Boolean));
     let results = [];
@@ -1132,6 +1266,12 @@ export default function App() {
       if (lastR === 'R') hasR = true;
     }
 
+    // Deduct cost immediately to prevent reload/race-condition double spending
+    saveGame({
+      ...latestPlayer,
+      gold: (latestPlayer.gold || 0) - cost
+    });
+
     const highestRarity = hasUR ? 'UR' : (hasSSR ? 'SSR' : (hasR ? 'R' : 'N'));
 
     const willUpgrade = (highestRarity === 'SSR' || highestRarity === 'UR') && Math.random() < 0.35;
@@ -1148,15 +1288,17 @@ export default function App() {
     const chargeDuration = highestRarity === 'UR' ? 3000 : (highestRarity === 'SSR' ? 2400 : 1500);
     sfx.playCharge(chargeDuration / 1000);
 
+    clearGachaTimers();
     if (willUpgrade) {
-      setTimeout(() => {
+      const upTimer = setTimeout(() => {
         sfx.playUpgradeGlitch();
         setGachaState(prev => ({ ...prev, status: 'upgrading', displayRarity: highestRarity }));
         triggerScreenShake();
       }, chargeDuration - 900);
+      gachaTimersRef.current.push(upTimer);
     }
 
-    setTimeout(() => {
+    const revealTimer = setTimeout(() => {
       if (highestRarity === 'UR' || highestRarity === 'SSR') {
         sfx.playRareChime(highestRarity === 'UR');
       } else {
@@ -1191,7 +1333,7 @@ export default function App() {
 
       saveGame({
         ...currentData,
-        gold: (currentData.gold || 0) - cost + refundGold,
+        gold: (currentData.gold || 0) + refundGold,
         inventory: addedInventory,
         pityCount: tempPity,
         dataCores: (currentData.dataCores || 0) + gainedCores,
@@ -1202,6 +1344,7 @@ export default function App() {
         showToast(`重複裝備轉化：獲得 ${gainedCores} 顆資料核心 + ${refundGold} G！`, "info");
       }
     }, chargeDuration + 400);
+    gachaTimersRef.current.push(revealTimer);
   };
 
   const closeGacha = () => setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
@@ -1271,12 +1414,6 @@ export default function App() {
     return 'text-white scale-100 opacity-80';
   };
 
-  const renderMonsterEmoji = () => {
-    const isBoss = waveState.currentWave === 3;
-    if (equippedSkin) return isBoss ? equippedSkin.bossEmoji : equippedSkin.emoji;
-    return isBoss ? '💀' : (combatUI.type === 'potion' ? '🧪' : '👾');
-  };
-
   const renderVFX = () => {
     if (!combatFx) return null;
     const vfxClass = equippedVFX ? equippedVFX.vfxClass : 'bg-white shadow-[0_0_20px_10px_rgba(6,182,212,0.8)]';
@@ -1292,11 +1429,29 @@ export default function App() {
     if (combatFx === 'heal') return <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-green-500/20 rounded-full blur-xl z-0" style={{ animation: 'flash-white 0.5s ease-out forwards' }} />;
   };
 
-  if (isLoading) return <div className="min-h-screen bg-gray-950 text-cyan-50 flex justify-center items-center">系統初始化中...</div>;
+  if (isLoading) return <div className="min-h-screen bg-gray-950 text-cyan-50 flex justify-center items-center font-cyber">系統初始化中...</div>;
   const currentRarityConfig = getRarityConfig(gachaState.displayRarity);
 
+  const isNemesisBattle =
+    screen === 'battle' &&
+    combatUI.data &&
+    combatUI.type !== 'potion' &&
+    (playerData.mistakeCounts?.[combatUI.data.id] || 0) >= 2 &&
+    (masteryObj[combatUI.data.id] || 0) === 0;
+  const isBossBattle = screen === 'battle' && waveState.currentWave === 3 && combatUI.type !== 'potion';
+  const ambientGlowStyle = isNemesisBattle || isBossBattle
+    ? 'radial-gradient(circle at 50% 30%, rgba(244, 63, 94, 0.24) 0%, rgba(153, 27, 27, 0.08) 45%, transparent 75%)'
+    : (screen === 'battle' && combo >= 3
+      ? 'radial-gradient(circle at 50% 30%, rgba(251, 191, 36, 0.2) 0%, rgba(245, 158, 11, 0.06) 45%, transparent 75%)'
+      : 'radial-gradient(circle at 50% 28%, rgba(6, 182, 212, 0.18) 0%, rgba(16, 185, 129, 0.05) 45%, transparent 75%)');
+
   return (
-    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 font-mono flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+    <div className={`h-screen h-[100dvh] min-h-screen bg-gray-950 text-cyan-50 flex flex-col md:max-w-md md:mx-auto border-x border-cyan-900/50 relative shadow-2xl overflow-hidden ${screenShake ? 'animate-[camera-shake_0.3s_ease-in-out]' : ''}`}>
+
+      {/* Cyber Atmosphere Layers */}
+      <div className="absolute inset-0 pointer-events-none z-0 cyber-grid-bg" />
+      <div className="absolute inset-0 pointer-events-none z-0 transition-all duration-700" style={{ background: ambientGlowStyle }} />
+      <div className="absolute inset-0 pointer-events-none z-0 cyber-scanlines opacity-70" />
 
       <style>{`
         @keyframes ring-spin-right { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1322,6 +1477,21 @@ export default function App() {
         </div>
       </div>
 
+      {/* --- 神速直覺 Cut-in 橫幅 --- */}
+      {flashCutIn && (
+        <div
+          key={flashCutIn.id}
+          className="absolute top-28 inset-x-0 z-[90] pointer-events-none flex justify-center overflow-hidden"
+        >
+          <div
+            className="w-full py-2 px-4 bg-gradient-to-r from-amber-500/95 via-yellow-400/95 to-cyan-400/95 text-black font-black text-xs sm:text-sm tracking-widest uppercase shadow-[0_0_25px_rgba(251,191,36,0.8)] border-y-2 border-white flex items-center justify-center gap-2 font-cyber"
+            style={{ animation: 'cut-in-sweep 0.88s ease-out forwards' }}
+          >
+            <Zap size={15} fill="currentColor" /> FLASH READ // 神速直覺 {flashCutIn.sec}s <Zap size={15} fill="currentColor" />
+          </div>
+        </div>
+      )}
+
       {/* --- 抽卡動態展示 (支援 10 連與變色昇格) --- */}
       <GachaModal
         gachaState={gachaState}
@@ -1334,10 +1504,10 @@ export default function App() {
       <BattleReportModal report={battleReport} onClose={() => setBattleReport(null)} />
 
       {/* --- Header --- */}
-      <header className="bg-gray-900 p-4 border-b border-cyan-800 flex flex-col gap-2 z-10 shrink-0">
+      <header className="bg-gray-900/90 backdrop-blur-md p-4 border-b border-cyan-800/80 flex flex-col gap-2 z-10 shrink-0">
         <div className="flex justify-between items-center text-sm gap-2">
           <div className="flex flex-col min-w-0">
-            <span className="text-cyan-400 font-bold flex items-center gap-1"><Terminal size={16}/> N4 語譯駭客</span>
+            <span className="text-cyan-400 font-black font-cyber tracking-wider flex items-center gap-1.5"><Terminal size={16}/> N4 語譯駭客</span>
             {account && (
               <div className="flex items-center gap-1.5 text-xs text-gray-400 font-mono min-w-0">
                 {account.mode === 'email' ? <Mail size={11} className="text-cyan-500 shrink-0" /> : <Smartphone size={11} className="text-cyan-500 shrink-0" />}
@@ -1364,10 +1534,16 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-red-400 text-xs w-6">HP</span>
-          <div className="flex-1 bg-gray-800 h-3 rounded-full overflow-hidden border border-red-900 relative">
-            <div className="bg-red-500 h-full transition-all duration-300" style={{ width: `${(Math.max(0, playerData.hp || 0) / (playerData.maxHp || 100)) * 100}%` }}></div>
+          <span className={`text-[11px] font-black flex items-center gap-1 shrink-0 ${screen === 'battle' && waveState.overloadMode ? 'text-rose-400 animate-pulse' : 'text-cyan-400'}`}>
+            <Shield size={12} /> {screen === 'battle' && waveState.overloadMode ? '過載續戰' : '護盾'}
+          </span>
+          <div className={`flex-1 bg-gray-800 h-2.5 rounded-full overflow-hidden border relative ${screen === 'battle' && waveState.overloadMode ? 'border-rose-700' : 'border-cyan-900'}`}>
+            <div
+              className={`h-full transition-all duration-300 ${screen === 'battle' && waveState.overloadMode ? 'bg-rose-500' : 'bg-gradient-to-r from-cyan-500 to-emerald-400'}`}
+              style={{ width: `${(Math.max(0, playerData.hp || 0) / (playerData.maxHp || 100)) * 100}%` }}
+            />
           </div>
+          <span className="text-[10px] font-mono text-gray-400 shrink-0">{Math.max(0, playerData.hp || 0)}/{playerData.maxHp || 100}</span>
         </div>
       </header>
 
@@ -1375,182 +1551,229 @@ export default function App() {
         {screen === 'login' && (
           <LoginScreen onLogin={handleLoginSuccess} />
         )}
-        {/* --- 主選單 --- */}
+        {/* --- 主選單 (Hero 主視覺舞台) --- */}
         {screen === 'menu' && (() => {
           const skillProfile = computeSkillProfile(playerData);
           const tierStats = getTierSummary(masteryObj);
           const nemesisPendingCount = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
+          const currentTierObj = DIFFICULTY_TIERS.find(t => t.id === difficultyTier) || DIFFICULTY_TIERS[0];
+          const currentModeObj = PRACTICE_MODES.find(m => m.id === practiceMode) || PRACTICE_MODES[0];
+          const checkedInToday = playerData.lastLoginDate === getLocalDateString();
 
           return (
-          <div className="flex-1 flex flex-col p-4 gap-3.5 justify-center">
-
-            <div className="bg-gray-900/80 p-4 rounded-xl border border-cyan-800 shadow-inner flex flex-col gap-3">
-              {/* 玩家階級與語感速度摘要 */}
-              <div className="flex items-center justify-between gap-2 bg-gray-950/80 p-2.5 rounded-xl border border-cyan-900/60">
+          <div className="flex-1 flex flex-col p-4 gap-3 justify-between relative">
+            {/* 頂部精簡狀態列：淨化進度 + 每日簽到 */}
+            <div className="bg-gray-900/75 backdrop-blur-sm p-3 rounded-2xl border border-cyan-900/60 flex flex-col gap-2 shadow-inner">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-xl shrink-0">{skillProfile.currentRank.badge}</span>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-xs font-black text-cyan-200 truncate">{skillProfile.currentRank.title}</span>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <div className="w-20 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${skillProfile.rankProgressPct}%` }} />
-                      </div>
-                      <span className="text-[10px] text-gray-400 font-bold">{skillProfile.xp} XP</span>
-                    </div>
-                  </div>
+                  <span className="text-xs font-black text-cyan-400 flex items-center gap-1">
+                    <Target size={14} /> 世界淨化 {purificationRate}%
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-bold">({masteredCount}/{TOTAL_ENEMIES})</span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {(playerData.bestAvgSpeed || 0) > 0 && (
-                    <span className="text-[10px] font-black text-amber-300 bg-amber-950/60 border border-amber-700/50 px-2 py-1 rounded-lg">
-                      ⚡ {playerData.bestAvgSpeed.toFixed(1)}s
-                    </span>
-                  )}
-                  {(playerData.nemesisSlainCount || 0) > 0 && (
-                    <span className="text-[10px] font-black text-rose-300 bg-rose-950/60 border border-rose-700/50 px-2 py-1 rounded-lg">
-                      ⚔️ {playerData.nemesisSlainCount}
-                    </span>
-                  )}
+                  <button
+                    onClick={() => setShowDetailedProgress(!showDetailedProgress)}
+                    className="text-[10px] text-cyan-400 hover:text-cyan-200 font-bold underline"
+                  >
+                    {showDetailedProgress ? '收合' : '詳情'}
+                  </button>
+                  <button
+                    onClick={handleDailyCheckIn}
+                    disabled={checkedInToday}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-black flex items-center gap-1 transition-all ${
+                      checkedInToday
+                        ? 'bg-gray-800 text-gray-400 border border-gray-700'
+                        : 'bg-emerald-600/80 hover:bg-emerald-500 text-white border border-emerald-400 animate-pulse'
+                    }`}
+                  >
+                    <CalendarCheck size={11} />
+                    {checkedInToday ? '已簽到' : '簽到 +200G'}
+                  </button>
                 </div>
               </div>
-
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-cyan-400 font-black text-sm tracking-wider">
-                  <span className="flex items-center gap-1"><Target size={16}/> 世界淨化進度</span>
-                  <span className="animate-pulse">{purificationRate}%</span>
-                </div>
-                <div className="h-3.5 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50 relative shadow-inner">
-                  <div className="h-full bg-cyan-500 transition-all duration-1000 shadow-[0_0_10px_cyan] rounded-full" style={{ width: `${purificationRate}%` }}></div>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <button onClick={() => setShowDetailedProgress(!showDetailedProgress)} className="text-[10px] text-cyan-500 hover:text-cyan-300 font-bold underline cursor-pointer">{showDetailedProgress ? '隱藏詳細資訊' : '詳細資訊'}</button>
-                  <div className="text-[10px] text-gray-500 font-bold">已掌握節點: {masteredCount} / {TOTAL_ENEMIES}</div>
-                </div>
-                {showDetailedProgress && (
-                  <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 text-xs text-gray-400 flex flex-col gap-1 mt-2 animate-in slide-in-from-top-2">
-                    <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
-                    <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
-                  </div>
-                )}
+              <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-cyan-900/50">
+                <div className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-1000 shadow-[0_0_8px_cyan]" style={{ width: `${purificationRate}%` }} />
               </div>
-
-              {/* 當前啟用的套裝共鳴提示 */}
-              {activeSetBonus && (
-                <div className="bg-cyan-950/40 border border-cyan-600/50 p-2.5 rounded-xl flex items-center justify-between text-xs">
-                  <div className="flex flex-col">
-                    <span className="text-cyan-300 font-black flex items-center gap-1"><Layers size={14}/> {activeSetBonus.name}</span>
-                    <span className="text-gray-400 mt-0.5">{activeSetBonus.desc}</span>
-                  </div>
-                  <CheckCircle2 size={18} className="text-cyan-400 shrink-0"/>
+              {showDetailedProgress && (
+                <div className="bg-gray-950/90 p-2.5 rounded-lg border border-gray-800 text-[11px] text-gray-400 flex flex-col gap-1 mt-1 animate-in slide-in-from-top-2">
+                  <div className="flex justify-between"><span>單字 (Vocab)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && VOCAB_IDS.has(id)).length} / {VOCAB_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法重組 (Sort)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && SORT_IDS.has(id)).length} / {GRAMMAR_SORT_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法變化 (Type)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && TYPE_IDS.has(id)).length} / {GRAMMAR_TYPE_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>文法選擇 (MCQ)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && MCQ_IDS.has(id)).length} / {GRAMMAR_MCQ_DATA.length}</span></div>
+                  <div className="flex justify-between"><span>閱讀 (Reading)</span><span>{Object.entries(masteryObj).filter(([id, c]) => c >= 3 && READING_IDS.has(id)).length} / {READING_DATA.length}</span></div>
                 </div>
               )}
-
-              <div className="grid grid-cols-2 gap-2 text-sm text-center">
-                <div className="bg-gray-800/50 p-2 rounded text-red-300 border border-gray-700/50">攻 {playerData.atk || 10}</div>
-                <div className="bg-gray-800/50 p-2 rounded text-blue-300 border border-gray-700/50">防 {playerData.def || 5}</div>
-              </div>
-              <button onClick={handleDailyCheckIn} disabled={playerData.lastLoginDate === getLocalDateString()} className={`w-full p-3.5 rounded-lg flex items-center justify-center gap-2 font-bold transition-all ${playerData.lastLoginDate === getLocalDateString() ? 'bg-gray-800 text-gray-500 border border-gray-700' : 'bg-green-700/50 hover:bg-green-600/60 border border-green-500 text-green-100 animate-pulse'}`}>
-                <CalendarCheck size={18} />
-                {playerData.lastLoginDate === getLocalDateString() ? '今日已連線' : '每日簽到 (+200G / 爆擊提升)'}
-              </button>
             </div>
 
-            {/* 漸進式難度分級 */}
-            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
-              <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={14}/> 難度階層篩選</span>
-                {nemesisPendingCount > 0 && (
-                  <span className="text-[10px] font-black text-rose-300 bg-rose-950/70 border border-rose-700/60 px-2 py-0.5 rounded-full">
-                    🔴 潛伏宿敵 {nemesisPendingCount} 題
+            {/* 中央 Hero 主視覺舞台：神經核心與階級徽章 */}
+            <div className="flex-1 flex flex-col items-center justify-center py-2 relative min-h-[190px]">
+              {/* Rotating Holographic Neural Core */}
+              <div className="relative flex items-center justify-center w-40 h-40">
+                <div className="absolute inset-0 rounded-full border border-dashed border-cyan-500/40" style={{ animation: 'ring-spin-right 22s linear infinite' }} />
+                <div className="absolute inset-3 rounded-full border-2 border-dotted border-emerald-400/35" style={{ animation: 'ring-spin-left 15s linear infinite' }} />
+                <div className="absolute inset-6 rounded-full bg-gradient-to-br from-cyan-950/90 via-gray-900 to-blue-950/90 border border-cyan-500/60 shadow-[0_0_35px_rgba(6,182,212,0.3)] flex flex-col items-center justify-center text-center p-2">
+                  <span className="text-3xl leading-none mb-1 drop-shadow-[0_0_12px_rgba(255,255,255,0.4)]">{skillProfile.currentRank.badge}</span>
+                  <span className="text-[11px] font-black text-cyan-200 leading-tight">{skillProfile.currentRank.title}</span>
+                  <span className="text-[10px] font-bold text-cyan-400/90 mt-0.5">{skillProfile.xp} XP</span>
+                </div>
+              </div>
+
+              {/* XP Progress + Stat Micro Chips */}
+              <div className="w-full max-w-[260px] flex flex-col items-center gap-2 mt-2">
+                <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500" style={{ width: `${skillProfile.rankProgressPct}%` }} />
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-black">
+                  <span className="px-2 py-0.5 rounded bg-gray-900/90 border border-emerald-800/60 text-emerald-300">
+                    🔥 連簽 {playerData.loginStreak || 0} 天
                   </span>
-                )}
+                  <span className="px-2 py-0.5 rounded bg-gray-900/90 border border-cyan-800/60 text-cyan-300">
+                    📘 累計 {playerData.vocabKills || 0} 題
+                  </span>
+                  {(playerData.bestAvgSpeed || 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-amber-950/70 border border-amber-700/60 text-amber-300">⚡ {playerData.bestAvgSpeed.toFixed(1)}s</span>
+                  )}
+                  {(playerData.nemesisSlainCount || 0) > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-rose-950/70 border border-rose-700/60 text-rose-300">⚔️ {playerData.nemesisSlainCount}</span>
+                  )}
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {DIFFICULTY_TIERS.map((t) => {
-                  const st = t.id === 'all' ? null : tierStats[Number(t.id)];
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => setDifficultyTier(t.id)}
-                      className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
-                    >
-                      <div className="flex justify-between items-center gap-1">
-                        <span className="text-[11px] font-black truncate">{t.label}</span>
-                        {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
-                      </div>
-                      <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
-                    </button>
-                  );
-                })}
-              </div>
+
+              {activeSetBonus && (
+                <div className="mt-2 bg-cyan-950/50 border border-cyan-600/50 px-3 py-1.5 rounded-full flex items-center gap-1.5 text-[11px]">
+                  <Layers size={13} className="text-cyan-300 shrink-0" />
+                  <span className="text-cyan-200 font-black">{activeSetBonus.name}</span>
+                </div>
+              )}
             </div>
 
-            {/* 訓練單元選擇 & 休閒模式／單字提示切換 */}
-            <div className="bg-gray-900/60 p-3 rounded-xl border border-gray-800 flex flex-col gap-2">
-              <div className="flex flex-wrap justify-between items-center gap-1.5">
-                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={14}/> 選擇練習單元</span>
-                <div className="flex items-center gap-1.5 flex-wrap">
+            {/* 出擊任務設定摘要 ＋ 主打 CTA */}
+            <div className="flex flex-col gap-2.5">
+              <div className="bg-gray-900/80 border border-gray-800 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                <div className="flex flex-col min-w-0">
+                  <div className="text-[10px] text-gray-400 font-bold flex items-center gap-1.5 flex-wrap">
+                    <span className="text-emerald-300 font-black">{currentTierObj.label}</span>
+                    <span>•</span>
+                    <span className="text-cyan-300 font-black">{currentModeObj.label}</span>
+                    {relaxedMode && <span className="text-emerald-400">• ☕休閒</span>}
+                    {vocabHintEnabled && <span className="text-cyan-400">• 💡提示</span>}
+                  </div>
+                  {nemesisPendingCount > 0 && (
+                    <span className="text-[10px] text-rose-400 font-bold mt-0.5">
+                      🔴 目前有 {nemesisPendingCount} 題宿敵潛伏於題庫中
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMissionConfig(true)}
+                  className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-cyan-800/70 text-cyan-200 text-xs font-black flex items-center gap-1 shrink-0 active:scale-95 transition-transform"
+                >
+                  <SlidersHorizontal size={13} /> 切換設定
+                </button>
+              </div>
+
+              <button
+                onClick={() => startWaveRun()}
+                className="relative group overflow-hidden cyber-chamfer bg-gradient-to-r from-cyan-900/90 via-cyan-800/90 to-blue-900/90 hover:from-cyan-700 hover:to-blue-700 border-2 border-cyan-400 p-4 flex items-center justify-center gap-3 text-lg font-black text-white shadow-[0_0_25px_rgba(6,182,212,0.35)] active:scale-95 transition-all"
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+                <Play size={22} fill="currentColor" /> 潛入戰鬥・{currentModeObj.label}
+              </button>
+
+              {(playerData.mistakes || []).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => startWaveRun('mistakes')}
+                  className="w-full py-2.5 px-3 rounded-xl bg-orange-950/60 hover:bg-orange-900/60 border border-orange-600/60 text-orange-200 text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                >
+                  <Flame size={14} className="text-orange-400" /> 立即進行錯題特訓（{(playerData.mistakes || []).length} 題待攻克）
+                </button>
+              )}
+            </div>
+
+            {/* 任務配置抽屜 Modal */}
+            {showMissionConfig && (
+              <div className="absolute inset-0 z-40 bg-black/85 backdrop-blur-md flex flex-col justify-end animate-in fade-in duration-150">
+                <div className="bg-gray-900 border-t-2 border-cyan-500/70 rounded-t-3xl p-4 flex flex-col gap-3 max-h-[85vh] overflow-y-auto shadow-[0_-10px_40px_rgba(6,182,212,0.25)]">
+                  <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                    <span className="text-sm font-black text-cyan-300 flex items-center gap-1.5">
+                      <SlidersHorizontal size={16} /> 作戰任務配置
+                    </span>
+                    <button type="button" onClick={() => setShowMissionConfig(false)} className="p-1.5 rounded-full bg-gray-800 text-gray-400 hover:text-white">
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* 難度階層篩選 */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Layers size={13}/> 難度階層篩選</span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {DIFFICULTY_TIERS.map((t) => {
+                        const st = t.id === 'all' ? null : tierStats[Number(t.id)];
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => setDifficultyTier(t.id)}
+                            className={`p-2 rounded-lg text-left border transition-all ${difficultyTier === t.id ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                          >
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-[11px] font-black truncate">{t.label}</span>
+                              {st && <span className="text-[9px] text-emerald-400/90 font-bold shrink-0">{st.mastered}/{st.total}</span>}
+                            </div>
+                            <div className="text-[9px] text-gray-500 truncate mt-0.5">{t.desc}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 練習單元 */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><BookOpen size={13}/> 訓練單元模式</span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {PRACTICE_MODES.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => setPracticeMode(m.id)}
+                          className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                        >
+                          <div>{m.label}</div>
+                          <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 輔助開關 */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleVocabHint}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-400 text-cyan-200' : 'bg-gray-950 border-gray-800 text-gray-400'}`}
+                    >
+                      {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRelaxedMode(!relaxedMode)}
+                      className={`p-2.5 rounded-xl text-xs font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200' : 'bg-gray-950 border-gray-800 text-gray-400'}`}
+                    >
+                      {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準計時模式'}
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={toggleVocabHint}
-                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${vocabHintEnabled ? 'bg-cyan-950/70 border-cyan-500 text-cyan-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
+                    onClick={() => { setShowMissionConfig(false); startWaveRun(); }}
+                    className="w-full py-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
                   >
-                    {vocabHintEnabled ? '💡 初見單字提示：開' : '💡 初見單字提示：關'}
-                  </button>
-                  <button
-                    onClick={() => setRelaxedMode(!relaxedMode)}
-                    className={`text-[11px] px-2.5 py-1 rounded-full font-bold border transition-colors ${relaxedMode ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-400'}`}
-                  >
-                    {relaxedMode ? '☕ 休閒學習：不限時' : '⏱️ 標準模式'}
+                    <Play size={16} fill="currentColor" /> 套用設定並開始「{currentModeObj.label}」
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {PRACTICE_MODES.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => setPracticeMode(m.id)}
-                    className={`p-2 rounded-lg text-xs font-bold border transition-all text-center ${practiceMode === m.id ? 'bg-cyan-900/60 border-cyan-400 text-cyan-200 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : 'bg-gray-950/70 border-gray-800 text-gray-400 hover:border-gray-600'}`}
-                  >
-                    <div>{m.label}</div>
-                    <div className="text-[9px] font-normal text-gray-500 truncate">{m.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button onClick={() => startWaveRun()} className="bg-cyan-900/50 border border-cyan-400 p-4 rounded-xl flex items-center justify-center gap-3 text-lg font-bold shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 transition-transform">
-              <Play size={24} /> 進入「{PRACTICE_MODES.find(m => m.id === practiceMode)?.label}」
-            </button>
-            
-            <div className="grid grid-cols-2 gap-2.5">
-              <button onClick={() => setScreen('loadout')} className="bg-blue-900/30 border border-blue-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                {(() => {
-                  const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
-                  const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
-                  return claimable > 0 ? (
-                    <span className="absolute -top-1.5 -right-1.5 bg-amber-400 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full animate-bounce">
-                      領獎!
-                    </span>
-                  ) : null;
-                })()}
-                <Backpack size={18} className="text-blue-400"/> <span className="text-xs font-bold">裝備圖鑑</span>
-              </button>
-              <button onClick={() => setScreen('codex')} className="bg-emerald-900/30 border border-emerald-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                <Brain size={18} className="text-emerald-400"/> <span className="text-xs font-bold">能力圖鑑</span>
-              </button>
-              <button onClick={() => { setScreen('shop'); setShopTab('gacha'); setIsEditingShop(false); }} className="bg-yellow-900/30 border border-yellow-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                <ShoppingCart size={18} className="text-yellow-400"/> <span className="text-xs font-bold">抽獎商城</span>
-              </button>
-              <button onClick={() => setScreen('records')} className="bg-orange-900/30 border border-orange-500/50 p-3.5 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-transform relative">
-                {(playerData.mistakes || []).length > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-black text-[10px] font-black px-1.5 py-0.5 rounded-full">{(playerData.mistakes || []).length}</span>
-                )}
-                <Database size={18} className="text-orange-400"/> <span className="text-xs font-bold">錯誤日誌</span>
-              </button>
-            </div>
+            )}
           </div>
           );
         })()}
@@ -1760,17 +1983,13 @@ export default function App() {
                 </div>
 
               </div>
-
-              <div className="pt-4 border-t border-gray-900 shrink-0 mt-auto">
-                <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-              </div>
             </div>
           );
         })()}
 
         {/* --- 日語能力樹＆圖鑑 --- */}
         {screen === 'codex' && (
-          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} />
+          <CodexScreen playerData={playerData} onBack={() => setScreen('menu')} hideBack={true} />
         )}
 
         {/* --- 戰鬥畫面 --- */}
@@ -1785,12 +2004,12 @@ export default function App() {
 
            return (
            <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900 px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
                <div className="flex items-center gap-2">
-                 <span className="font-bold text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
+                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
                  <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
-               <button onClick={() => setIsPaused(true)} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               <button onClick={handlePause} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
              </div>
 
              {isNonPotion && stage && (
@@ -1810,24 +2029,37 @@ export default function App() {
              )}
 
              <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
-               {combo > 1 && (<div className={`font-black italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
+               {combo > 1 && (<div className={`font-black font-cyber italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
              </div>
 
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[150px]">
-                 {renderVFX()}
-
-                 <div className={`relative z-10 w-28 h-28 rounded-full flex items-center justify-center text-6xl border-4 shadow-xl transition-all duration-300 ${isNemesis ? 'bg-rose-950 border-rose-500 text-rose-400 animate-pulse drop-shadow-[0_0_20px_rgba(244,63,94,0.6)]' : (waveState.currentWave === 3 ? 'bg-red-950 border-red-500 text-red-500 animate-pulse drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]' : 'bg-gray-800 border-cyan-700 text-cyan-400')}`}>
-                   {renderMonsterEmoji()}
-                   {damageNumbers.map(d => (
-                     <div key={d.id} className={`absolute font-black pointer-events-none drop-shadow-md flex items-center gap-1 ${d.isHeal ? 'text-green-400 text-3xl' : (d.isCrit ? 'text-yellow-400 text-4xl' : 'text-white text-2xl')}`} style={{ left: `calc(50% + ${d.offsetX}px)`, top: '10%', animation: 'damage-float 1s ease-out forwards' }}>
-                       {d.isCrit && '💥'} {d.amount}
-                     </div>
-                   ))}
-                 </div>
+               <div className="relative flex flex-col items-center justify-center my-auto min-h-[165px]">
+                 {(() => {
+                   const isHitNow = Boolean(combatFx && combatFx !== 'heal');
+                   const monsterHpPercent = combatUI.type === 'reading'
+                     ? (() => {
+                         const totalQ = combatUI.data.questions?.length || 1;
+                         const remaining = Math.max(0, totalQ - combatUI.readingStep - (isHitNow ? 1 : 0));
+                         return (remaining / totalQ) * 100;
+                       })()
+                     : (isHitNow ? 0 : 100);
+                   return (
+                     <CyberMonster
+                       type={combatUI.type}
+                       isBoss={waveState.currentWave === 3}
+                       isNemesis={isNemesis}
+                       equippedSkin={equippedSkin}
+                       hpPercent={monsterHpPercent}
+                       isHit={isHitNow}
+                       isHealed={combatFx === 'heal'}
+                       damageNumbers={damageNumbers}
+                       vfxOverlay={renderVFX()}
+                     />
+                   );
+                 })()}
 
                  {equippedSkin?.battleQuip && (
-                   <div className="mt-2 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
+                   <div className="mt-1 px-3 py-1 rounded-full bg-gray-900/90 border border-cyan-800/50 text-[11px] text-cyan-200/90 font-bold text-center max-w-[90%] z-10">
                      {equippedSkin.battleQuip}
                    </div>
                  )}
@@ -2085,7 +2317,7 @@ export default function App() {
                       <CheckCircle2 className="text-green-500 mb-2 animate-pulse" size={40} />
                     )}
                     <h3 className={`font-black ${feedback.isWrong ? 'text-red-400' : 'text-green-400'} text-xl`}>
-                      {feedback.isWrong ? `防線突破！受到 ${feedback.damageTaken} 傷害` : '解析成功！'}
+                      {feedback.isWrong ? `防線突破！護盾 -${feedback.damageTaken}` : '解析成功！'}
                     </h3>
                   </div>
                   <div className="p-6 flex flex-col gap-5 overflow-y-auto whitespace-pre-wrap">
@@ -2134,7 +2366,7 @@ export default function App() {
                   </div>
                   <div className="p-6 flex flex-col gap-4">
                     <button onClick={handleResume} className="bg-cyan-700 hover:bg-cyan-600 text-white p-5 rounded-xl font-bold flex justify-center gap-2 active:scale-95 transition-transform text-lg"><PlayCircle size={24} /> 繼續戰鬥</button>
-                    <button onClick={handleRestartBattle} className="bg-gray-800 border border-gray-600 text-gray-200 p-5 rounded-xl font-bold flex justify-center gap-2 active:scale-95 transition-transform text-lg"><RotateCcw size={24} /> 重新挑戰 (免扣血)</button>
+                    <button onClick={handleRestartBattle} className="bg-gray-800 border border-gray-600 text-gray-200 p-5 rounded-xl font-bold flex justify-center gap-2 active:scale-95 transition-transform text-lg"><RotateCcw size={24} /> 重新挑戰 (護盾重滿)</button>
                     <div className="w-full h-px bg-gray-800 my-2"></div>
                     <button onClick={handleSurrender} className="bg-red-950 border border-red-800 text-red-400 p-5 rounded-xl font-bold flex justify-center gap-2 active:scale-95 transition-transform text-lg"><XOctagon size={24} /> 放棄並撤退 (無懲罰)</button>
                   </div>
@@ -2410,10 +2642,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            <div className="p-4 border-t border-gray-900 shrink-0 bg-gray-950">
-               <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 hover:bg-gray-700 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
           </div>
         )}
 
@@ -2476,12 +2704,31 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div className="pt-4 border-t border-gray-900 mt-auto shrink-0">
-              <button onClick={() => setScreen('menu')} className="w-full bg-gray-800 p-5 rounded-2xl font-black text-lg active:scale-95 transition-transform">返回終端機</button>
-            </div>
           </div>
         )}
       </main>
+
+      {screen !== 'login' && screen !== 'battle' && (() => {
+        const ownedCnt = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean)).size;
+        const claimable = COLLECTION_MILESTONES.filter(m => ownedCnt >= m.count && !(playerData.claimedMilestones || []).includes(m.count)).length;
+        const nemesisPending = Object.entries(playerData.mistakeCounts || {}).filter(([id, c]) => c >= 2 && (masteryObj[id] || 0) === 0).length;
+        return (
+          <BottomNav
+            screen={screen}
+            onNavigate={(nextScreen) => {
+              setShowMissionConfig(false);
+              if (nextScreen === 'shop') {
+                setShopTab('gacha');
+                setIsEditingShop(false);
+              }
+              setScreen(nextScreen);
+            }}
+            claimableMilestones={claimable}
+            mistakeCount={(playerData.mistakes || []).length}
+            nemesisCount={nemesisPending}
+          />
+        );
+      })()}
     </div>
   );
 }
