@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { sfx } from './utils/soundFX';
 import { tts } from './utils/tts';
 import { toHiragana, stripRuby } from './utils/ruby';
+import { buildVocabReadingOptions } from './utils/vocabDistractors';
 import { VOCAB_DATA, GRAMMAR_SORT_DATA, GRAMMAR_TYPE_DATA, POTION_DATA, READING_DATA, GRAMMAR_MCQ_DATA } from './data/questions';
 import { VIRTUAL_GACHA_POOL, SET_BONUSES, BANNER_THEMES, DEFAULT_GACHA_POOL, COLLECTION_MILESTONES } from './data/gachaPool';
 import { RubyText } from './components/RubyText';
@@ -295,7 +296,8 @@ export default function App() {
       uiState.data = encounter.data;
     }
     if (encounter.type === 'vocab') {
-      const hasKanji = encounter.data.ch.includes('[');
+      const plainWord = stripRuby(encounter.data.ch);
+      const hasKanji = /[\u4e00-\u9faf\u3005\u30f6]/.test(plainWord);
       const usedWords = new Set([encounter.data.ch]);
       if (!hasKanji) {
         // Pure-kana words test Chinese meaning so the answer isn't identical to the question
@@ -315,21 +317,10 @@ export default function App() {
           options: shuffle([encounter.data.usage, ...wrongUsages])
         };
       } else {
-        const usedReadings = new Set([encounter.data.answers[0]]);
-        const wrongReadings = [];
-        for (const v of shuffle(VOCAB_DATA)) {
-          const ans = v.answers?.[0];
-          if (v.id !== encounter.data.id && !usedWords.has(v.ch) && ans && !usedReadings.has(ans)) {
-            usedWords.add(v.ch);
-            usedReadings.add(ans);
-            wrongReadings.push(ans);
-            if (wrongReadings.length >= 3) break;
-          }
-        }
         uiState.data = {
           ...encounter.data,
           vocabMode: 'reading',
-          options: shuffle([encounter.data.answers[0], ...wrongReadings])
+          options: buildVocabReadingOptions(encounter.data, VOCAB_DATA, shuffle)
         };
       }
     }
