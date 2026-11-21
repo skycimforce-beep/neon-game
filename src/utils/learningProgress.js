@@ -307,5 +307,5 @@ export const getAllCodexEntries = () => [
   ...GRAMMAR_SORT_DATA.map((d) => ({ id: d.id, type: 'sort', typeLabel: '重組', title: `${d.context} ${d.correctOrder.map(i => d.parts[i]).join('')}`, sub: `${d.example || ''} — ${d.translation}`, reading: '', tier: getQuestionTier(d.id), speakText: `${d.context.replace('／', '')}${d.correctOrder.map(i => d.parts[i]).join('')}` })),
   ...GRAMMAR_TYPE_DATA.map((d) => ({ id: d.id, type: 'type', typeLabel: '活用', title: `${d.base} → ${d.correct}`, sub: d.translation, reading: '', tier: getQuestionTier(d.id), speakText: d.example || d.correct })),
   ...GRAMMAR_MCQ_DATA.map((d) => ({ id: d.id, type: 'mcq', typeLabel: '文法', title: d.options[d.correct], sub: `${d.question.replace(/\n/g, ' ')}`, reading: '', tier: getQuestionTier(d.id), speakText: d.example || d.options[d.correct] })),
-  ...READING_DATA.map((d) => ({ id: d.id, type: 'reading', typeLabel: '閱讀', title: d.text.slice(0, 32) + '…', sub: d.translation.slice(0, 48) + '…', reading: '', tier: getQuestionTier(d.id), speakText: d.text }))
+  ...READING_DATA.map((d) => ({ id: d.id, type: 'reading', typeLabel: '閱讀', title: stripRuby(d.text).slice(0, 32) + '…', sub: d.translation.slice(0, 48) + '…', reading: '', tier: getQuestionTier(d.id), speakText: d.text }))
 ];
