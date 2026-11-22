@@ -2197,8 +2197,16 @@ export default function App() {
                  )}
                  {combatUI.type === 'type' && (
                    <form onSubmit={handleTypeSubmit} className="flex flex-col gap-3.5 animate-in slide-in-from-bottom-4">
-                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2 items-center">
+                     <div className="bg-gray-900 p-4 rounded-lg border border-gray-700 flex flex-col gap-2.5 items-center">
+                       <div className="text-[11px] font-black tracking-wide text-amber-300 bg-amber-950/60 border border-amber-600/50 px-3 py-1 rounded-full">
+                         ⚡ 語法活用填空：請只輸入【】內的正確日語
+                       </div>
                        <div className="text-center text-lg sm:text-xl font-bold leading-loose"><RubyText text={combatUI.data.prompt} showRuby={currentLv === 0} /></div>
+                       {combatUI.data.hint && (
+                         <div className="text-center text-xs text-amber-200 font-bold bg-amber-950/40 border border-amber-700/50 rounded-lg px-3 py-1.5 w-full">
+                           📌 考點提示：{combatUI.data.hint}
+                         </div>
+                       )}
                        {combatUI.data.exampleZh && (
                          currentLv < 2 || showTranslationHint ? (
                            <div className="text-center text-xs sm:text-sm text-cyan-300/90 font-bold border-t border-gray-800 pt-2 w-full">
@@ -2217,10 +2225,10 @@ export default function App() {
                      </div>
                      {combatUI.data.base && (
                        <div className="text-center text-xs text-cyan-400 font-bold">
-                         💡 支援漢字或平假名輸入（原形：<RubyText text={combatUI.data.base} showRuby={currentLv === 0} />）
+                         💡 支援漢字或平假名輸入（轉換基準：<RubyText text={combatUI.data.base} showRuby={currentLv === 0} />）
                        </div>
                      )}
-                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-4 sm:p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
+                     <input type="text" value={combatUI.inputValue} onChange={e => setCombatUI(prev => ({ ...prev, inputValue: e.target.value }))} placeholder="輸入【】內的正確變化（漢字 / ひらがな）..." className="bg-gray-800 border-2 border-cyan-700 rounded-xl p-4 sm:p-5 text-center text-2xl focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_15px_rgba(6,182,212,0.3)] w-full transition-all" autoFocus />
                      <button type="submit" className="bg-cyan-700 text-white p-4 sm:p-5 rounded-xl font-black text-xl flex items-center justify-center gap-2 active:bg-cyan-600 active:scale-95 transition-transform shadow-lg"><FastForward /> 詠唱發射</button>
                    </form>
                  )}
