@@ -566,7 +566,7 @@ export default function App() {
       const curHp = latestPData.hp ?? 100;
       let dmg = Math.floor((latestPData.maxHp || 100) * 0.3);
 
-      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && (curHp - dmg <= 0)) {
+      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && (curHp - dmg <= 0) && curHp > 0) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
         dmg = Math.max(0, curHp - 1);
         showToast("🛡️ 量子死線防禦生效！強制保留 1 點護盾！", "success");
@@ -588,13 +588,17 @@ export default function App() {
         pData.mistakeCounts[qId] = (pData.mistakeCounts[qId] || 0) + 1;
         const qData = combatUI.data.questions?.[combatUI.readingStep];
         if (qData) {
+          const optionsText = qData.optionTranslations && qData.optionTranslations.length > 0
+            ? qData.options.map((opt, i) => `${i + 1}. ${opt} (${qData.optionTranslations[i]})`).join('\n')
+            : '';
+          const fullExplanation = optionsText ? `【選項翻譯】\n${optionsText}\n\n【解析】\n${qData.explanation}` : qData.explanation;
           const mistakeEntry = {
             id: qId,
             type: 'reading',
             q: qData.q,
             a: qData.options[qData.correct],
-            exp: qData.explanation,
-            example: '【文章翻譯】',
+            exp: fullExplanation,
+            example: combatUI.data.text || '【文章翻譯】',
             exampleZh: combatUI.data.translation
           };
           const filteredMistakes = (pData.mistakes || []).filter(
@@ -1120,7 +1124,7 @@ export default function App() {
       q: qData.q,
       a: qData.options[qData.correct],
       exp: fullExplanation,
-      example: '【文章翻譯】',
+      example: combatUI.data.text || '【文章翻譯】',
       exampleZh: combatUI.data.translation
     };
 
@@ -1411,11 +1415,15 @@ export default function App() {
   };
 
   const handleEquipSet = (setKey) => {
+    const ownedIds = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
     const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
     const vfxItem = setItems.find(i => i.type === 'vfx');
     const skinItem = setItems.find(i => i.type === 'skin');
     const chipItem = setItems.find(i => i.type === 'chip');
     if (!vfxItem || !skinItem || !chipItem) return;
+    if (!ownedIds.has(vfxItem.id) || !ownedIds.has(skinItem.id) || !ownedIds.has(chipItem.id)) {
+      return showToast('尚未集齊該套裝的 3 件裝備！', 'error');
+    }
     sfx.playHit();
     saveGame({
       ...playerData,
@@ -1444,6 +1452,8 @@ export default function App() {
   const renderVFX = () => {
     if (!combatFx) return null;
     const vfxClass = equippedVFX ? equippedVFX.vfxClass : 'bg-white shadow-[0_0_20px_10px_rgba(6,182,212,0.8)]';
+    const shieldClass = equippedVFX?.shieldClass || 'text-cyan-400';
+    const magicClass = equippedVFX?.magicClass || 'to-red-500';
     const extraIcon = equippedVFX?.extra;
 
     if (combatFx === 'slash') return (
@@ -1451,8 +1461,8 @@ export default function App() {
         {extraIcon && <span className="absolute text-5xl animate-ping opacity-80" style={{ transform: 'rotate(30deg)' }}>{extraIcon}</span>}
       </div>
     );
-    if (combatFx === 'shield') return <Hexagon size={150} className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 ${equippedVFX ? equippedVFX.vfxClass.split(' ')[0].replace('bg-','text-') : 'text-cyan-400'}`} style={{ animation: 'shield-burst 0.5s ease-out forwards' }} />;
-    if (combatFx === 'magic') return <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 bg-gradient-to-t from-transparent z-0 origin-bottom ${equippedVFX ? equippedVFX.vfxClass.split(' ')[0].replace('bg-','to-') : 'to-red-500'}`} style={{ height: '300px', animation: 'magic-pillar 0.5s ease-out forwards' }} />;
+    if (combatFx === 'shield') return <Hexagon size={150} className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 ${shieldClass}`} style={{ animation: 'shield-burst 0.5s ease-out forwards' }} />;
+    if (combatFx === 'magic') return <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 bg-gradient-to-t from-transparent z-0 origin-bottom ${magicClass}`} style={{ height: '300px', animation: 'magic-pillar 0.5s ease-out forwards' }} />;
     if (combatFx === 'heal') return <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-green-500/20 rounded-full blur-xl z-0" style={{ animation: 'flash-white 0.5s ease-out forwards' }} />;
   };
 
@@ -1817,7 +1827,7 @@ export default function App() {
             const categoryItems = VIRTUAL_GACHA_POOL.filter(i => i.type === itemType);
             const isDefaultEquipped = itemType === 'chip'
               ? !playerData.equipped?.chip
-              : playerData.equipped?.[itemType] === defaultId;
+              : (playerData.equipped?.[itemType] || defaultId) === defaultId;
 
             return (
               <div className="grid grid-cols-1 gap-3">
@@ -2031,12 +2041,29 @@ export default function App() {
 
            return (
            <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
-               <div className="flex items-center gap-2">
-                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
-                 <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0 gap-2">
+               <div className="flex items-center gap-2 min-w-0">
+                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full shrink-0">WAVE {waveState.currentWave} / 3</span>
+                 <span className="truncate">進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
-               <button onClick={handlePause} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               <div className="flex items-center gap-2 shrink-0">
+                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
+                   relaxedMode ? (
+                     <span className="flex items-center gap-1 text-cyan-300 font-bold bg-cyan-950/80 px-2.5 py-1 rounded-full text-[11px] border border-cyan-500/40">
+                       ☕ 休閒
+                     </span>
+                   ) : (
+                     <span className={`flex items-center gap-1 font-black font-cyber px-2.5 py-1 rounded-full text-xs border ${
+                       combatUI.timeLeft <= 20
+                         ? 'text-red-300 bg-red-950/90 border-red-500 animate-pulse'
+                         : 'text-red-400 bg-red-950/80 border-red-500/50'
+                     }`}>
+                       <Clock size={14} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                     </span>
+                   )
+                 )}
+                 <button onClick={handlePause} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               </div>
              </div>
 
              {isNonPotion && stage && (
@@ -2060,7 +2087,7 @@ export default function App() {
              </div>
 
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[165px]">
+               <div className={`relative shrink-0 flex flex-col items-center justify-center ${combatUI.type === 'reading' ? 'py-1 mb-2' : 'my-auto min-h-[165px]'}`}>
                  {(() => {
                    const isHitNow = Boolean(combatFx && combatFx !== 'heal');
                    const monsterHpPercent = combatUI.type === 'reading'
@@ -2090,21 +2117,9 @@ export default function App() {
                      {equippedSkin.battleQuip}
                    </div>
                  )}
-
-                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
-                   relaxedMode ? (
-                     <div className="flex items-center gap-2 text-cyan-300 font-bold bg-cyan-950/70 px-4 py-1.5 rounded-full text-sm mt-4 border border-cyan-500/40 z-10">
-                       ☕ 休閒學習模式（無時間限制）
-                     </div>
-                   ) : (
-                     <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
-                       <Clock size={20} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
-                     </div>
-                   )
-                 )}
                </div>
 
-               <div className="flex-1 flex flex-col justify-end gap-4 pb-4">
+               <div className={`flex-1 flex flex-col gap-4 pb-4 ${combatUI.type === 'reading' ? 'justify-start' : 'justify-end'}`}>
                  {combatUI.type === 'vocab' && (
                    <div className="animate-in slide-in-from-bottom-4">
                      <div className="text-center text-xs font-bold text-cyan-400 tracking-wider mb-1">
@@ -2261,7 +2276,7 @@ export default function App() {
                    </div>
                  )}
                  {combatUI.type === 'reading' && readingAnalysis && (
-                   <div className="flex flex-col gap-3 overflow-y-auto max-h-[62vh] animate-in fade-in">
+                   <div className="flex flex-col gap-3 animate-in fade-in">
                      {/* 已知單字解碼條 */}
                      <div className="bg-cyan-950/40 border border-cyan-800/60 p-2.5 rounded-xl flex flex-col gap-1.5">
                        <div className="flex justify-between items-center text-[11px] font-bold">
@@ -2373,10 +2388,10 @@ export default function App() {
                     {feedback.example && (
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-400 font-bold">🗣️ 應用範例</span>
+                          <span className="text-sm text-gray-400 font-bold">{combatUI.type === 'reading' ? '📖 原文閱讀與翻譯' : '🗣️ 應用範例'}</span>
                           {tts.isSupported() && feedback.example !== '【文章翻譯】' && (
                             <button type="button" onClick={() => tts.speak(feedback.example)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-yellow-700/50 text-yellow-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
-                              <Volume2 size={14} /> 朗讀例句
+                              <Volume2 size={14} /> {combatUI.type === 'reading' ? '朗讀全文' : '朗讀例句'}
                             </button>
                           )}
                         </div>
