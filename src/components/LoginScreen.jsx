@@ -47,24 +47,34 @@ export const LoginScreen = ({ onLogin }) => {
   const loginTimerRef = useRef(null);
 
   const fullBootSequence = "INITIATING SYSTEM...\nCONNECTING TO MAINFRAME...\nVERIFYING AUTH CHANNEL...\nREADY FOR CREDENTIALS.";
+  const bootIntervalRef = useRef(null);
+  const bootDoneTimerRef = useRef(null);
+
+  const skipBoot = () => {
+    if (!isBooting) return;
+    if (bootIntervalRef.current) clearInterval(bootIntervalRef.current);
+    if (bootDoneTimerRef.current) clearTimeout(bootDoneTimerRef.current);
+    setBootText(fullBootSequence);
+    setIsBooting(false);
+  };
 
   useEffect(() => {
     let currentLength = 0;
-    let bootDoneTimer = null;
-    const interval = setInterval(() => {
-      currentLength++;
+    bootIntervalRef.current = setInterval(() => {
+      currentLength += 2;
       setBootText(fullBootSequence.substring(0, currentLength));
       if (currentLength >= fullBootSequence.length) {
-        clearInterval(interval);
-        bootDoneTimer = setTimeout(() => setIsBooting(false), 500);
+        clearInterval(bootIntervalRef.current);
+        bootIntervalRef.current = null;
+        bootDoneTimerRef.current = setTimeout(() => setIsBooting(false), 180);
       }
-    }, 20);
+    }, 14);
 
     sfx.init();
 
     return () => {
-      clearInterval(interval);
-      if (bootDoneTimer) clearTimeout(bootDoneTimer);
+      if (bootIntervalRef.current) clearInterval(bootIntervalRef.current);
+      if (bootDoneTimerRef.current) clearTimeout(bootDoneTimerRef.current);
       if (loginTimerRef.current) clearTimeout(loginTimerRef.current);
     };
   }, []);
@@ -107,16 +117,19 @@ export const LoginScreen = ({ onLogin }) => {
     } catch { /* ignore storage errors */ }
 
     setIsLoggingIn(true);
-    sfx.playCharge(1.5);
+    sfx.playCharge(0.6);
 
     loginTimerRef.current = setTimeout(() => {
       loginTimerRef.current = null;
       onLogin(account);
-    }, 1500);
+    }, 550);
   };
 
   return (
-    <div className={`flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden transition-all duration-1000 ${isLoggingIn ? 'animate-[camera-shake_0.3s_infinite] scale-105 opacity-0' : 'opacity-100'}`}>
+    <div
+      onClick={isBooting ? skipBoot : undefined}
+      className={`flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden transition-all duration-500 ${isLoggingIn ? 'animate-[camera-shake_0.3s_infinite] scale-105 opacity-0' : 'opacity-100'}`}
+    >
 
       {/* Background decoration */}
       <div className="absolute inset-0 z-0 pointer-events-none opacity-20">
@@ -139,11 +152,16 @@ export const LoginScreen = ({ onLogin }) => {
         <div className="bg-gray-900/80 p-4 rounded-lg border border-cyan-900/50 min-h-[100px] text-xs font-mono text-cyan-400 whitespace-pre-wrap flex flex-col justify-end shadow-inner relative overflow-hidden">
            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent animate-pulse" />
            {bootText}
-           {isBooting && <span className="animate-ping inline-block w-2 h-4 bg-cyan-400 ml-1 translate-y-1" />}
+           {isBooting && (
+             <div className="flex items-center justify-between mt-1">
+               <span className="animate-ping inline-block w-2 h-4 bg-cyan-400" />
+               <span className="text-[10px] text-cyan-500/80 font-sans font-bold">點擊任意處略過</span>
+             </div>
+           )}
         </div>
 
         {/* Input Form */}
-        <form onSubmit={handleLogin} className={`flex flex-col gap-3.5 transition-all duration-700 transform ${isBooting ? 'translate-y-10 opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'}`}>
+        <form onSubmit={handleLogin} className={`flex flex-col gap-3.5 transition-all duration-500 transform ${isBooting ? 'translate-y-6 opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'}`}>
 
           {/* Login Mode Tabs */}
           <div className="grid grid-cols-2 gap-2 bg-gray-900/80 p-1 rounded-xl border border-cyan-900/60">

@@ -169,6 +169,7 @@ export default function App() {
   const answerTimerRef = useRef(null);
   const toastTimerRef = useRef(null);
   const gachaTimersRef = useRef([]);
+  const pendingGachaRevealRef = useRef(null);
 
   const clearAnswerTimer = () => {
     if (answerTimerRef.current) {
@@ -566,7 +567,7 @@ export default function App() {
       const curHp = latestPData.hp ?? 100;
       let dmg = Math.floor((latestPData.maxHp || 100) * 0.3);
 
-      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && (curHp - dmg <= 0)) {
+      if (equippedChip?.id === 'chip_ur1' && !waveState.shieldUsed && (curHp - dmg <= 0) && curHp > 0) {
         setWaveState(prev => ({ ...prev, shieldUsed: true }));
         dmg = Math.max(0, curHp - 1);
         showToast("🛡️ 量子死線防禦生效！強制保留 1 點護盾！", "success");
@@ -588,13 +589,17 @@ export default function App() {
         pData.mistakeCounts[qId] = (pData.mistakeCounts[qId] || 0) + 1;
         const qData = combatUI.data.questions?.[combatUI.readingStep];
         if (qData) {
+          const optionsText = qData.optionTranslations && qData.optionTranslations.length > 0
+            ? qData.options.map((opt, i) => `${i + 1}. ${opt} (${qData.optionTranslations[i]})`).join('\n')
+            : '';
+          const fullExplanation = optionsText ? `【選項翻譯】\n${optionsText}\n\n【解析】\n${qData.explanation}` : qData.explanation;
           const mistakeEntry = {
             id: qId,
             type: 'reading',
             q: qData.q,
             a: qData.options[qData.correct],
-            exp: qData.explanation,
-            example: '【文章翻譯】',
+            exp: fullExplanation,
+            example: combatUI.data.text || '【文章翻譯】',
             exampleZh: combatUI.data.translation
           };
           const filteredMistakes = (pData.mistakes || []).filter(
@@ -611,8 +616,14 @@ export default function App() {
     }
   }, [combatUI.timeLeft, screen, combatUI.type, feedback.show, isPaused, isAnswering, relaxedMode]);
 
-  const handleSecretClick = () => { setSecretClicks(p => p + 1); if (clickTimeout.current) clearTimeout(clickTimeout.current); clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000); };
+  const handleSecretClick = () => {
+    if (!import.meta.env.DEV) return;
+    setSecretClicks(p => p + 1);
+    if (clickTimeout.current) clearTimeout(clickTimeout.current);
+    clickTimeout.current = setTimeout(() => setSecretClicks(0), 1000);
+  };
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     if (secretClicks >= 5) {
       saveGame({ ...playerData, gold: (playerData.gold || 0) + 5000, dataCores: (playerData.dataCores || 0) + 10 });
       showToast("⚠️【管理員模式】已注入 5000 G 與 10 顆資料核心！", "success");
@@ -1120,7 +1131,7 @@ export default function App() {
       q: qData.q,
       a: qData.options[qData.correct],
       exp: fullExplanation,
-      example: '【文章翻譯】',
+      example: combatUI.data.text || '【文章翻譯】',
       exampleZh: combatUI.data.translation
     };
 
@@ -1293,10 +1304,37 @@ export default function App() {
       if (lastR === 'R') hasR = true;
     }
 
-    // Deduct cost immediately to prevent reload/race-condition double spending
+    let addedInventory = [...(latestPlayer.inventory || [])];
+    let gainedCores = 0;
+    let refundGold = 0;
+
+    const nowStr = new Date().toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const newHistory = results.map((r, idx) => ({
+      id: Date.now() + idx,
+      item: r.item.item || r.item,
+      rarity: r.rarity,
+      date: nowStr
+    }));
+
+    if (poolType === 'virtual') {
+      results.forEach(r => {
+        if (r.isDuplicate) {
+          refundGold += 100;
+          gainedCores += (r.rarity === 'UR' ? 5 : (r.rarity === 'SSR' ? 3 : 1));
+        } else {
+          addedInventory.push(r.item);
+        }
+      });
+    }
+
+    // Atomic save before starting reveal animation so reload/close never loses gold or rolled items
     saveGame({
       ...latestPlayer,
-      gold: (latestPlayer.gold || 0) - cost
+      gold: (latestPlayer.gold || 0) - cost + refundGold,
+      inventory: addedInventory,
+      pityCount: tempPity,
+      dataCores: (latestPlayer.dataCores || 0) + gainedCores,
+      gachaHistory: [...newHistory, ...(latestPlayer.gachaHistory || [])].slice(0, 60)
     });
 
     const highestRarity = hasUR ? 'UR' : (hasSSR ? 'SSR' : (hasR ? 'R' : 'N'));
@@ -1316,6 +1354,8 @@ export default function App() {
     sfx.playCharge(chargeDuration / 1000);
 
     clearGachaTimers();
+    pendingGachaRevealRef.current = { highestRarity, gainedCores, refundGold };
+
     if (willUpgrade) {
       const upTimer = setTimeout(() => {
         sfx.playUpgradeGlitch();
@@ -1326,55 +1366,37 @@ export default function App() {
     }
 
     const revealTimer = setTimeout(() => {
-      if (highestRarity === 'UR' || highestRarity === 'SSR') {
-        sfx.playRareChime(highestRarity === 'UR');
-      } else {
-        sfx.playHit();
-      }
-
-      setGachaState(prev => ({ ...prev, status: 'revealed' }));
-
-      const currentData = playerDataRef.current;
-      let addedInventory = [...(currentData.inventory || [])];
-      let gainedCores = 0;
-      let refundGold = 0;
-
-      const nowStr = new Date().toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const newHistory = results.map((r, idx) => ({
-        id: Date.now() + idx,
-        item: r.item.item || r.item,
-        rarity: r.rarity,
-        date: nowStr
-      }));
-
-      if (poolType === 'virtual') {
-        results.forEach(r => {
-          if (r.isDuplicate) {
-            refundGold += 100;
-            gainedCores += (r.rarity === 'UR' ? 5 : (r.rarity === 'SSR' ? 3 : 1));
-          } else {
-            addedInventory.push(r.item);
-          }
-        });
-      }
-
-      saveGame({
-        ...currentData,
-        gold: (currentData.gold || 0) + refundGold,
-        inventory: addedInventory,
-        pityCount: tempPity,
-        dataCores: (currentData.dataCores || 0) + gainedCores,
-        gachaHistory: [...newHistory, ...(currentData.gachaHistory || [])].slice(0, 60)
-      });
-
-      if (gainedCores > 0) {
-        showToast(`重複裝備轉化：獲得 ${gainedCores} 顆資料核心 + ${refundGold} G！`, "info");
-      }
+      revealGachaNow();
     }, chargeDuration + 400);
     gachaTimersRef.current.push(revealTimer);
   };
 
-  const closeGacha = () => setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
+  const revealGachaNow = () => {
+    const pending = pendingGachaRevealRef.current;
+    if (!pending) return;
+    pendingGachaRevealRef.current = null;
+    clearGachaTimers();
+
+    if (pending.highestRarity === 'UR' || pending.highestRarity === 'SSR') {
+      sfx.playRareChime(pending.highestRarity === 'UR');
+    } else {
+      sfx.playHit();
+    }
+
+    setGachaState(prev => ({ ...prev, status: 'revealed', displayRarity: pending.highestRarity }));
+
+    if (pending.gainedCores > 0) {
+      showToast(`重複裝備轉化：獲得 ${pending.gainedCores} 顆資料核心 + ${pending.refundGold} G！`, "info");
+    }
+  };
+
+  const skipGacha = () => revealGachaNow();
+
+  const closeGacha = () => {
+    clearGachaTimers();
+    pendingGachaRevealRef.current = null;
+    setGachaState({ status: 'idle', results: [], highestRarity: 'N', isUpgrade: false, displayRarity: 'N' });
+  };
 
   const getCoreCost = (rarity) => (rarity === 'UR' ? 15 : (rarity === 'SSR' ? 8 : (rarity === 'R' ? 3 : 1)));
 
@@ -1411,11 +1433,15 @@ export default function App() {
   };
 
   const handleEquipSet = (setKey) => {
+    const ownedIds = new Set((playerData.inventory || []).map(i => i?.id).filter(Boolean));
     const setItems = VIRTUAL_GACHA_POOL.filter(i => i.set === setKey);
     const vfxItem = setItems.find(i => i.type === 'vfx');
     const skinItem = setItems.find(i => i.type === 'skin');
     const chipItem = setItems.find(i => i.type === 'chip');
     if (!vfxItem || !skinItem || !chipItem) return;
+    if (!ownedIds.has(vfxItem.id) || !ownedIds.has(skinItem.id) || !ownedIds.has(chipItem.id)) {
+      return showToast('尚未集齊該套裝的 3 件裝備！', 'error');
+    }
     sfx.playHit();
     saveGame({
       ...playerData,
@@ -1444,6 +1470,8 @@ export default function App() {
   const renderVFX = () => {
     if (!combatFx) return null;
     const vfxClass = equippedVFX ? equippedVFX.vfxClass : 'bg-white shadow-[0_0_20px_10px_rgba(6,182,212,0.8)]';
+    const shieldClass = equippedVFX?.shieldClass || 'text-cyan-400';
+    const magicClass = equippedVFX?.magicClass || 'to-red-500';
     const extraIcon = equippedVFX?.extra;
 
     if (combatFx === 'slash') return (
@@ -1451,8 +1479,8 @@ export default function App() {
         {extraIcon && <span className="absolute text-5xl animate-ping opacity-80" style={{ transform: 'rotate(30deg)' }}>{extraIcon}</span>}
       </div>
     );
-    if (combatFx === 'shield') return <Hexagon size={150} className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 ${equippedVFX ? equippedVFX.vfxClass.split(' ')[0].replace('bg-','text-') : 'text-cyan-400'}`} style={{ animation: 'shield-burst 0.5s ease-out forwards' }} />;
-    if (combatFx === 'magic') return <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 bg-gradient-to-t from-transparent z-0 origin-bottom ${equippedVFX ? equippedVFX.vfxClass.split(' ')[0].replace('bg-','to-') : 'to-red-500'}`} style={{ height: '300px', animation: 'magic-pillar 0.5s ease-out forwards' }} />;
+    if (combatFx === 'shield') return <Hexagon size={150} className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 ${shieldClass}`} style={{ animation: 'shield-burst 0.5s ease-out forwards' }} />;
+    if (combatFx === 'magic') return <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 bg-gradient-to-t from-transparent z-0 origin-bottom ${magicClass}`} style={{ height: '300px', animation: 'magic-pillar 0.5s ease-out forwards' }} />;
     if (combatFx === 'heal') return <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-green-500/20 rounded-full blur-xl z-0" style={{ animation: 'flash-white 0.5s ease-out forwards' }} />;
   };
 
@@ -1525,6 +1553,7 @@ export default function App() {
         currentRarityConfig={currentRarityConfig}
         getRarityConfig={getRarityConfig}
         closeGacha={closeGacha}
+        skipGacha={skipGacha}
       />
 
       {/* --- 戰後大腦語譯戰報 --- */}
@@ -1817,7 +1846,7 @@ export default function App() {
             const categoryItems = VIRTUAL_GACHA_POOL.filter(i => i.type === itemType);
             const isDefaultEquipped = itemType === 'chip'
               ? !playerData.equipped?.chip
-              : playerData.equipped?.[itemType] === defaultId;
+              : (playerData.equipped?.[itemType] || defaultId) === defaultId;
 
             return (
               <div className="grid grid-cols-1 gap-3">
@@ -2031,12 +2060,29 @@ export default function App() {
 
            return (
            <div className="flex-1 min-h-0 flex flex-col p-4 relative overflow-hidden">
-             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0">
-               <div className="flex items-center gap-2">
-                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full">WAVE {waveState.currentWave} / 3</span>
-                 <span>進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
+             <div className="flex justify-between items-center text-xs text-gray-500 mb-2 bg-gray-900/90 backdrop-blur-sm px-3 py-2 rounded-full border border-gray-800 shadow-sm z-10 shrink-0 gap-2">
+               <div className="flex items-center gap-2 min-w-0">
+                 <span className="font-bold font-cyber text-cyan-400 bg-cyan-950 px-3 py-1 rounded-full shrink-0">WAVE {waveState.currentWave} / 3</span>
+                 <span className="truncate">進度 {waveState.currentIndex + 1} / {waveState.queue.length}</span>
                </div>
-               <button onClick={handlePause} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               <div className="flex items-center gap-2 shrink-0">
+                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
+                   relaxedMode ? (
+                     <span className="flex items-center gap-1 text-cyan-300 font-bold bg-cyan-950/80 px-2.5 py-1 rounded-full text-[11px] border border-cyan-500/40">
+                       ☕ 休閒
+                     </span>
+                   ) : (
+                     <span className={`flex items-center gap-1 font-black font-cyber px-2.5 py-1 rounded-full text-xs border ${
+                       combatUI.timeLeft <= 20
+                         ? 'text-red-300 bg-red-950/90 border-red-500 animate-pulse'
+                         : 'text-red-400 bg-red-950/80 border-red-500/50'
+                     }`}>
+                       <Clock size={14} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
+                     </span>
+                   )
+                 )}
+                 <button onClick={handlePause} disabled={feedback.show || isAnswering} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-full text-gray-300 active:scale-90 transition-transform disabled:opacity-50"><Pause size={18} /></button>
+               </div>
              </div>
 
              {isNonPotion && stage && (
@@ -2047,6 +2093,19 @@ export default function App() {
                  <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${stage.badgeClass}`}>
                    {stage.label}
                  </span>
+                 {equippedChip && (
+                   <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                     (equippedChip.id === 'chip_ur1' && waveState.shieldUsed) || (equippedChip.id === 'chip_r_anime' && waveState.comboShieldUsed)
+                       ? 'bg-gray-900 text-gray-500 border-gray-800'
+                       : 'bg-cyan-950/70 text-cyan-300 border-cyan-700/60'
+                   }`}>
+                     {equippedChip.id === 'chip_ur1'
+                       ? (waveState.shieldUsed ? '🛡️ 免死已用' : '🛡️ 免死待命')
+                       : equippedChip.id === 'chip_r_anime'
+                         ? (waveState.comboShieldUsed ? '🔥 保連已用' : '🔥 保連待命')
+                         : `${equippedChip.icon} ${equippedChip.item}`}
+                   </span>
+                 )}
                  {isNemesis && (
                    <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-200 border border-rose-500 animate-pulse flex items-center gap-1">
                      <Swords size={11} /> 宿敵警報（曾錯 {currentFailCnt} 次・擊破 +30G）
@@ -2055,12 +2114,12 @@ export default function App() {
                </div>
              )}
 
-             <div className="absolute top-16 right-4 flex flex-col items-end z-10 pointer-events-none transition-all duration-300">
-               {combo > 1 && (<div className={`font-black font-cyber italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
-             </div>
-
              <div className={`flex-1 min-h-0 overflow-y-auto flex flex-col transition-opacity duration-300 ${isPaused || feedback.show || isAnswering ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}>
-               <div className="relative flex flex-col items-center justify-center my-auto min-h-[165px]">
+               <div className={`relative shrink-0 flex flex-col items-center justify-center ${combatUI.type === 'reading' ? 'py-1 mb-2' : 'my-auto min-h-[165px]'}`}>
+                 <div className="absolute top-0 right-1 flex flex-col items-end z-20 pointer-events-none transition-all duration-300">
+                   {combo > 1 && (<div className={`font-black font-cyber italic transition-all duration-200 ${getComboStyle()}`}><span className="text-3xl">{combo}</span> <span className="text-sm">COMBO</span></div>)}
+                 </div>
+
                  {(() => {
                    const isHitNow = Boolean(combatFx && combatFx !== 'heal');
                    const monsterHpPercent = combatUI.type === 'reading'
@@ -2090,28 +2149,26 @@ export default function App() {
                      {equippedSkin.battleQuip}
                    </div>
                  )}
-
-                 {waveState.currentWave === 3 && combatUI.type === 'reading' && (
-                   relaxedMode ? (
-                     <div className="flex items-center gap-2 text-cyan-300 font-bold bg-cyan-950/70 px-4 py-1.5 rounded-full text-sm mt-4 border border-cyan-500/40 z-10">
-                       ☕ 休閒學習模式（無時間限制）
-                     </div>
-                   ) : (
-                     <div className="flex items-center gap-2 text-red-400 font-bold bg-red-950/80 px-5 py-2 rounded-full text-xl mt-4 border border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.3)] z-10">
-                       <Clock size={20} className={isPaused || feedback.show || isAnswering ? '' : 'animate-spin'} /> {combatUI.timeLeft}s
-                     </div>
-                   )
-                 )}
                </div>
 
-               <div className="flex-1 flex flex-col justify-end gap-4 pb-4">
+               <div className={`flex-1 flex flex-col gap-4 pb-4 ${combatUI.type === 'reading' ? 'justify-start' : 'justify-end'}`}>
                  {combatUI.type === 'vocab' && (
                    <div className="animate-in slide-in-from-bottom-4">
                      <div className="text-center text-xs font-bold text-cyan-400 tracking-wider mb-1">
                        {combatUI.data.vocabMode === 'meaning' ? '📖 請選擇正確中文意思' : '🔤 請選擇正確讀音'}
                      </div>
-                     <div className="flex items-center justify-center gap-3 mb-2 pt-2">
-                       <div className="text-center text-5xl font-black tracking-widest drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose"><RubyText text={combatUI.data.ch} showRuby={false} /></div>
+                     <div className="flex items-center justify-center gap-3 mb-2 pt-2 px-2">
+                       {(() => {
+                         const chLen = stripRuby(combatUI.data.ch).length;
+                         const vocabSizeClass = chLen >= 6
+                           ? 'text-2xl sm:text-3xl tracking-wider'
+                           : (chLen >= 4 ? 'text-3xl sm:text-4xl tracking-wider' : 'text-5xl tracking-widest');
+                         return (
+                           <div className={`text-center font-black drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] leading-loose ${vocabSizeClass}`}>
+                             <RubyText text={combatUI.data.ch} showRuby={false} />
+                           </div>
+                         );
+                       })()}
                        {tts.isSupported() && (
                          <button type="button" onClick={() => tts.speak(combatUI.data.ch)} title="朗讀單字" className="p-2.5 rounded-full bg-gray-800 hover:bg-cyan-900 border border-cyan-700/60 text-cyan-300 active:scale-90 transition-transform shrink-0">
                            <Volume2 size={20} />
@@ -2261,7 +2318,7 @@ export default function App() {
                    </div>
                  )}
                  {combatUI.type === 'reading' && readingAnalysis && (
-                   <div className="flex flex-col gap-3 overflow-y-auto max-h-[62vh] animate-in fade-in">
+                   <div className="flex flex-col gap-3 animate-in fade-in">
                      {/* 已知單字解碼條 */}
                      <div className="bg-cyan-950/40 border border-cyan-800/60 p-2.5 rounded-xl flex flex-col gap-1.5">
                        <div className="flex justify-between items-center text-[11px] font-bold">
@@ -2373,10 +2430,10 @@ export default function App() {
                     {feedback.example && (
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-400 font-bold">🗣️ 應用範例</span>
+                          <span className="text-sm text-gray-400 font-bold">{combatUI.type === 'reading' ? '📖 原文閱讀與翻譯' : '🗣️ 應用範例'}</span>
                           {tts.isSupported() && feedback.example !== '【文章翻譯】' && (
                             <button type="button" onClick={() => tts.speak(feedback.example)} className="px-2.5 py-1 rounded-lg bg-gray-800 hover:bg-cyan-900 border border-yellow-700/50 text-yellow-300 flex items-center gap-1 text-xs font-bold active:scale-95 transition-transform">
-                              <Volume2 size={14} /> 朗讀例句
+                              <Volume2 size={14} /> {combatUI.type === 'reading' ? '朗讀全文' : '朗讀例句'}
                             </button>
                           )}
                         </div>
@@ -2507,12 +2564,14 @@ export default function App() {
                 </div>
               )}
 
-              {shopTab === 'settings' && (
+              {shopTab === 'settings' && (() => {
+                const editTotalChance = Math.round(editPool.reduce((s, i) => s + Number(i.chance || 0), 0) * 1000) / 1000;
+                return (
                 <div className="flex flex-col pb-6">
                   <div className="bg-gray-900 p-5 rounded-2xl border border-gray-800 mb-5 text-center">
                     <div className="text-sm text-gray-400 mb-2 font-bold">機率總和限制</div>
-                    <div className={`text-3xl font-black ${(!isEditingShop ? true : editPool.reduce((s, i) => s + Number(i.chance||0), 0) === 100) ? 'text-green-400' : 'text-red-400'}`}>
-                      {isEditingShop ? editPool.reduce((s, i) => s + Number(i.chance||0), 0) : 100} <span className="text-lg">/ 100 %</span>
+                    <div className={`text-3xl font-black ${(!isEditingShop || editTotalChance === 100) ? 'text-green-400' : 'text-red-400'}`}>
+                      {isEditingShop ? editTotalChance : 100} <span className="text-lg">/ 100 %</span>
                     </div>
                   </div>
                   {!isEditingShop ? (
@@ -2534,7 +2593,7 @@ export default function App() {
                             <input type="text" value={p.item} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, item: val } : it)); }} placeholder="獎勵名稱" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white focus:outline-none focus:border-cyan-500 font-bold" />
                             <div className="flex gap-2">
                               <div className="flex-1 relative">
-                                <input type="number" min="1" max="100" value={p.chance} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, chance: val } : it)); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
+                                <input type="number" min="0.1" step="any" max="100" value={p.chance} onChange={e => { const val = e.target.value; setEditPool(prev => prev.map((it, idx) => idx === i ? { ...it, chance: val } : it)); }} placeholder="機率" className="bg-gray-900 border-2 border-gray-700 p-4 rounded-xl text-base text-white w-full pr-10 focus:outline-none focus:border-cyan-500 font-bold text-right" />
                                 <span className="absolute right-4 top-4 text-gray-500 font-bold">%</span>
                               </div>
                               <button onClick={() => setEditPool(prev => prev.filter((_, idx) => idx !== i))} className="bg-red-900/50 text-red-400 p-4 rounded-xl border-2 border-red-800 active:scale-95 w-16 flex items-center justify-center"><Trash2 size={24}/></button>
@@ -2549,7 +2608,7 @@ export default function App() {
                           if (editPool.length === 0) return showToast("必須至少有一個獎勵選項！", "error");
                           if (editPool.some(p => !String(p.item || '').trim())) return showToast("獎勵名稱不能為空！", "error");
                           if (editPool.some(p => !Number.isFinite(Number(p.chance)) || Number(p.chance) <= 0 || Number(p.chance) > 100)) {
-                            return showToast("每個項目的機率必須介於 1% 到 100% 之間！", "error");
+                            return showToast("每個項目的機率必須大於 0% 且不超過 100%！", "error");
                           }
                           const normalizedPool = editPool.map((p, idx) => ({
                             ...p,
@@ -2557,8 +2616,8 @@ export default function App() {
                             item: String(p.item).trim(),
                             chance: Number(p.chance)
                           }));
-                          const totalChance = normalizedPool.reduce((sum, item) => sum + item.chance, 0);
-                          if (Math.round(totalChance * 1000) / 1000 !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
+                          const totalChance = Math.round(normalizedPool.reduce((sum, item) => sum + item.chance, 0) * 1000) / 1000;
+                          if (totalChance !== 100) return showToast(`機率總和必須是 100%！(目前：${totalChance}%)`, "error");
 
                           if (playerData.isGachaLocked) {
                             if ((playerData.gold || 0) < 1000) { setBtnShake(true); setTimeout(() => setBtnShake(false), 500); return showToast("金幣不足！修改需要 1000 G。", "error"); }
@@ -2575,7 +2634,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
 
               {shopTab === 'history' && (
                 <div className="flex flex-col h-full">

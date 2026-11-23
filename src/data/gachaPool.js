@@ -9,6 +9,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '閱讀測驗時間 +1 秒，浪漫加成',
     vfxClass: 'bg-pink-400 drop-shadow-[0_0_25px_pink]',
+    shieldClass: 'text-pink-400 drop-shadow-[0_0_20px_pink]',
+    magicClass: 'to-pink-400 drop-shadow-[0_0_25px_pink]',
     extra: '🌸',
     desc: '「桜が散るスピードは秒速5センチ。」但考前背的單字消散速度大概是秒速 500 字。'
   },
@@ -47,6 +49,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: 'Combo 3 以上每題額外 +15 G',
     vfxClass: 'bg-cyan-400 drop-shadow-[0_0_25px_cyan]',
+    shieldClass: 'text-cyan-400 drop-shadow-[0_0_20px_cyan]',
+    magicClass: 'to-cyan-400 drop-shadow-[0_0_25px_cyan]',
     extra: '⚡',
     desc: '試圖用腦波直接下載整本《大家的日本語》，副作用是作夢都在喊「ます形」。'
   },
@@ -98,6 +102,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: 'Combo 2 以上答對額外 +6 G',
     vfxClass: 'bg-amber-500 drop-shadow-[0_0_25px_#f59e0b]',
+    shieldClass: 'text-amber-500 drop-shadow-[0_0_20px_#f59e0b]',
+    magicClass: 'to-amber-500 drop-shadow-[0_0_25px_#f59e0b]',
     extra: '☕',
     desc: '凌晨兩點灌下第三罐販賣機無糖黑咖啡，眼皮跟五段動詞一起劇烈顫抖！'
   },
@@ -136,6 +142,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '藥水題護盾回復量提升至 1.5 倍',
     vfxClass: 'bg-yellow-300 drop-shadow-[0_0_25px_#fde047]',
+    shieldClass: 'text-yellow-300 drop-shadow-[0_0_20px_#fde047]',
+    magicClass: 'to-yellow-300 drop-shadow-[0_0_25px_#fde047]',
     extra: '🍻',
     desc: '「とりあえず生で！」進居酒屋第一句只會點生啤，但靠這句就夠在東京活下來。'
   },
@@ -185,6 +193,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '動詞變化與文法重組答對額外 +10 G',
     vfxClass: 'bg-fuchsia-500 drop-shadow-[0_0_28px_#d946ef]',
+    shieldClass: 'text-fuchsia-500 drop-shadow-[0_0_22px_#d946ef]',
+    magicClass: 'to-fuchsia-500 drop-shadow-[0_0_28px_#d946ef]',
     extra: '🔥',
     desc: '「漆黒の炎に抱かれて消えろ！」聽得懂這句中二台詞的人，N4 應該都能輕鬆過吧？'
   },
@@ -210,6 +220,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '全通關額外獎勵 +150 G',
     vfxClass: 'bg-gradient-to-r from-red-500 via-purple-500 to-cyan-400 drop-shadow-[0_0_30px_cyan]',
+    shieldClass: 'text-purple-400 drop-shadow-[0_0_25px_cyan]',
+    magicClass: 'via-purple-500 to-cyan-400 drop-shadow-[0_0_30px_cyan]',
     extra: '🌌',
     desc: '把所有搞混的自動詞、他動詞還有敬語尊敬語通通吸進黑洞，眼不見為淨！'
   },
@@ -237,6 +249,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '答對時 25% 機率觸發額外 +12 G 閃電紅包',
     vfxClass: 'bg-purple-400 drop-shadow-[0_0_20px_purple]',
+    shieldClass: 'text-purple-400 drop-shadow-[0_0_18px_purple]',
+    magicClass: 'to-purple-400 drop-shadow-[0_0_20px_purple]',
     desc: '中規中矩但很帥氣的紫色電弧，至少讓鄰座的人以為你正在打什麼高深電競。'
   },
   {
@@ -283,6 +297,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '文法選擇題答對 +8 G',
     vfxClass: 'bg-emerald-400 drop-shadow-[0_0_20px_#34d399]',
+    shieldClass: 'text-emerald-400 drop-shadow-[0_0_18px_#34d399]',
+    magicClass: 'to-emerald-400 drop-shadow-[0_0_20px_#34d399]',
     extra: '✏️',
     desc: '考前忘記帶專用 2B 鉛筆的救星！在答案卡上高速畫圈也能刷出炫光。'
   },
@@ -323,6 +339,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: null,
     vfxClass: 'bg-blue-400 drop-shadow-[0_0_15px_blue]',
+    shieldClass: 'text-blue-400 drop-shadow-[0_0_15px_blue]',
+    magicClass: 'to-blue-400 drop-shadow-[0_0_15px_blue]',
     desc: '像丟進池塘的小水花一樣清澈，也像考前一天讀進腦的單字一樣瞬間散開。'
   },
   {
@@ -369,6 +387,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '滿懷童年成就感的答題特效',
     vfxClass: 'bg-rose-400 drop-shadow-[0_0_15px_#fb7185]',
+    shieldClass: 'text-rose-400 drop-shadow-[0_0_15px_#fb7185]',
+    magicClass: 'to-rose-400 drop-shadow-[0_0_15px_#fb7185]',
     extra: '💮',
     desc: '小時候作業本上最想收集的大紅花「よくできました！」看到心情就變好。'
   },
@@ -381,6 +401,8 @@ export const VIRTUAL_GACHA_POOL = [
     type: 'vfx',
     buff: '答對額外 +2 G（夜間手速）',
     vfxClass: 'bg-lime-400 drop-shadow-[0_0_15px_#a3e635]',
+    shieldClass: 'text-lime-400 drop-shadow-[0_0_15px_#a3e635]',
+    magicClass: 'to-lime-400 drop-shadow-[0_0_15px_#a3e635]',
     extra: '🦟',
     desc: '半夜背動詞變化總有蚊子在耳邊「ぶーん」，揮手打蚊子的反射神經比選答案還快。'
   },
