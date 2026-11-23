@@ -1,4 +1,4 @@
-import { stripRuby } from './ruby';
+import { stripRuby, normalizeRubyBrackets } from './ruby';
 
 class JapaneseTTS {
   constructor() {
@@ -17,7 +17,7 @@ class JapaneseTTS {
 
   speak(rawText, rate = 0.9) {
     if (!this.enabled || !this.isSupported() || !rawText) return;
-    const cleanText = stripRuby(rawText)
+    const cleanText = stripRuby(normalizeRubyBrackets(rawText))
       .replace(/／/g, '、')
       .replace(/___/g, ' ')
       .replace(/(^|[\s、。/])[～〜]+/g, '$1')
@@ -44,7 +44,7 @@ class JapaneseTTS {
 
   speakAnswer(rawAnswer, rate = 0.9) {
     if (!rawAnswer || typeof rawAnswer !== 'string') return;
-    const stripped = stripRuby(rawAnswer)
+    const stripped = stripRuby(normalizeRubyBrackets(rawAnswer))
       .split('（')[0]
       .split(' / ')[0]
       .trim();
